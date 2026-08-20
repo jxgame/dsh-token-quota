@@ -55,7 +55,7 @@ clone 后需在本机构建（工具链来自 DSH 仓库的 workspace）。
 1. 克隆到与 `deepseek-harness` 同级的开发目录：
 
    ```bash
-   git clone <repo-url> deepseek-harness-package/dsh-token-quota
+   git clone https://github.com/jxgame/dsh-token-quota.git deepseek-harness-package/dsh-token-quota
    ```
 
 2. 在 `deepseek-harness/pnpm-workspace.yaml` 的 `packages:` 下注册该包（让它的
