@@ -25,6 +25,13 @@
   gap: 8px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.header:active {
+  cursor: grabbing;
 }
 
 .headerText {
@@ -188,31 +195,40 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
-/* Collapsed tab pinned to the right edge. */
+/* Collapsed: a prominent pill button pinned where the panel was, so the
+   expand entry is impossible to miss (the old vertical tab at mid-screen
+   was easy to overlook / got covered by other overlays). */
 .tab {
   position: fixed;
-  top: 50%;
-  right: 0;
-  transform: translateY(-50%);
-  padding: 10px 6px;
-  border-radius: 8px 0 0 8px;
-  background: var(--dsw-alias-bg-overlay);
-  border: 1px solid var(--dsw-alias-border-l1);
-  border-right: none;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  top: 56px;
+  right: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  background: var(--dsw-alias-brand-primary);
+  border: 1px solid var(--dsw-alias-brand-primary);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+  color: var(--dsw-alias-bg-overlay);
+  font-size: 12px;
+  font-weight: 600;
   pointer-events: auto;
   cursor: pointer;
-  z-index: 40;
+  z-index: 90;
 }
 
 .tab:hover {
-  background: var(--dsw-alias-bg-layer-1);
+  filter: brightness(1.08);
+}
+
+.tabIcon {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .tabLabel {
-  writing-mode: vertical-rl;
-  font-size: 11px;
-  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
 }
 
 /* Header action buttons (settings + collapse). */
@@ -283,21 +299,18 @@
   border-radius: 8px;
 }
 
-/* Settings dialog. */
-.dialogBackdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.35);
-  border-radius: 12px;
-}
-
+/* Settings / log dialog: a viewport-fixed draggable window. It starts
+   centered (left/top 50% + translate) and switches to explicit left/top
+   once dragged, so it can be moved anywhere on screen — including outside
+   the panel it belongs to. */
 .dialog {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
   width: 280px;
-  max-height: 80%;
+  max-height: 80vh;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -403,12 +416,27 @@
   color: var(--dsw-alias-bg-overlay);
 }
 
-/* Dialog header with a prominent close X. */
+/* Dialog header: sticks to the top while the dialog body scrolls (the
+   close X never scrolls away), doubles as the drag handle, and pads back
+   over the dialog's own padding so it reads edge-to-edge. */
 .dialogHeader {
+  position: sticky;
+  top: -14px;
+  margin: -14px -14px 0;
+  padding: 14px 14px 8px;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  background: var(--dsw-alias-bg-overlay);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.dialogHeader:active {
+  cursor: grabbing;
 }
 
 .dialogClose {
@@ -485,4 +513,39 @@
 
 .logUsedCol {
   text-align: right;
+}
+
+/* Usage-log dialog: wider than the settings dialog, and the table scrolls
+   inside its own pane so the header (close X) stays put while the log
+   scrolls in BOTH directions — the old layout let the X scroll away
+   horizontally. */
+.logDialog {
+  width: 380px;
+  max-height: min(72vh, 480px);
+  gap: 0;
+  padding: 0;
+}
+
+.logHeader {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 14px 8px;
+  background: var(--dsw-alias-bg-overlay);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.logHeader:active {
+  cursor: grabbing;
+}
+
+.logScroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 14px 14px;
 }

@@ -8,7 +8,8 @@
  * arrives through the props shares and every mutation through the injected
  * callbacks.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import type {
   PropsLocale, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -76,6 +77,59 @@ const FULL_ACTIONS: ReadonlyArray<{ value: TokenQuotaFullAction; labelKey: Token
   { value: 'switchPriority', labelKey: 'fullSwitchPriority' },
 ]
 
+/** One absolute screen position (left/top for a fixed-positioned element). */
+type Pos = { x: number; y: number }
+
+/**
+ * Pointer-driven drag of a fixed-positioned element. Deltas are applied
+ * relative to the element's current on-screen rect, so the first move is
+ * seamless even when the element sits centered via transform (dialogs) or
+ * relies on CSS defaults (panel). The panel/dialog can be dragged anywhere
+ * on screen — no longer locked inside the overlay seat.
+ */
+function beginDrag(
+  event: ReactPointerEvent,
+  el: HTMLElement | null,
+  apply: (pos: Pos) => void,
+): void {
+  if (el === null) return
+  event.preventDefault()
+  const startX = event.clientX
+  const startY = event.clientY
+  const rect = el.getBoundingClientRect()
+  const baseX = rect.left
+  const baseY = rect.top
+  const onMove = (ev: PointerEvent): void => {
+    apply({ x: baseX + (ev.clientX - startX), y: baseY + (ev.clientY - startY) })
+  }
+  const onUp = (): void => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    window.removeEventListener('pointercancel', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
+}
+
+/** Persisted panel placement so a dragged position survives reloads. */
+const PANEL_POS_KEY = 'dsh-token-quota:panel-pos'
+
+function loadPanelPos(): Pos | null {
+  try {
+    const raw = window.localStorage.getItem(PANEL_POS_KEY)
+    if (raw === null) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (typeof parsed === 'object' && parsed !== null
+      && typeof (parsed as Pos).x === 'number' && typeof (parsed as Pos).y === 'number') {
+      return parsed as Pos
+    }
+  } catch {
+    // Corrupted or unavailable storage: fall back to the default placement.
+  }
+  return null
+}
+
 /**
  * Render the floating panel (or its collapsed tab).
  * @param props - composed slot props.
@@ -87,6 +141,22 @@ export function TokenQuotaPanel({
   const [collapsed, setCollapsed] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [editingKey, setEditingKey] = useState<string | null>(null)
+  // Draggable placements: the panel persists across reloads; the dialogs
+  // start centered (null) and remember where they were dragged to.
+  const [panelPos, setPanelPos] = useState<Pos | null>(loadPanelPos)
+  const [settingsPos, setSettingsPos] = useState<Pos | null>(null)
+  const [logPos, setLogPos] = useState<Pos | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  const settingsRef = useRef<HTMLDivElement>(null)
+  const logRef = useRef<HTMLDivElement>(null)
+  const applyPanelPos = (pos: Pos): void => {
+    setPanelPos(pos)
+    try {
+      window.localStorage.setItem(PANEL_POS_KEY, JSON.stringify(pos))
+    } catch {
+      // Storage unavailable: the position still applies for this session.
+    }
+  }
   const sessionId = useSessions(s => s.current)
   const snapshot = useStore(s => s.snapshot)
   const groups = useStore(s => s.groups)
@@ -122,25 +192,10 @@ export function TokenQuotaPanel({
 
   const isMonitoredKey = (key: string): boolean => monitored === null || monitored.includes(key)
 
-  if (collapsed) {
-    return (
-      <div
-        className={css.tab}
-        role="button"
-        tabIndex={0}
-        title={t('title')}
-        onClick={() => { setCollapsed(false) }}
-      >
-        <span className={css.tabLabel}>{t('expand')}</span>
-      </div>
-    )
-  }
-
-  const openSettings = (): void => {
-    actions.setDialogOpen(true)
-  }
-
-  // Fetch the usage log whenever the log dialog opens.
+  // Fetch the usage log whenever the log dialog opens. Kept ABOVE the
+  // collapsed early-return: every hook must run on every render, otherwise
+  // React unmounts the component the moment the panel collapses (the old
+  // placement made the collapsed tab crash instead of showing).
   useEffect(() => {
     if (!logOpen) return
     let cancelled = false
@@ -152,6 +207,32 @@ export function TokenQuotaPanel({
     })
     return () => { cancelled = true }
   }, [logOpen, actions])
+
+  if (collapsed) {
+    return (
+      <div
+        className={css.tab}
+        role="button"
+        tabIndex={0}
+        title={t('expandHint')}
+        aria-label={t('expandHint')}
+        onClick={() => { setCollapsed(false) }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setCollapsed(false)
+          }
+        }}
+      >
+        <span className={css.tabIcon} aria-hidden="true">▸</span>
+        <span className={css.tabLabel}>{t('expand')}</span>
+      </div>
+    )
+  }
+
+  const openSettings = (): void => {
+    actions.setDialogOpen(true)
+  }
 
   const commitLimit = (row: ModelQuotaRow): void => {
     const raw = drafts[row.key]?.trim()
@@ -169,13 +250,20 @@ export function TokenQuotaPanel({
   const visibleRows = rows.filter(row => isMonitoredKey(row.key) || row.current)
 
   return (
-    <div className={css.panel}>
-      <div className={css.header}>
+    <div
+      ref={panelRef}
+      className={css.panel}
+      style={panelPos !== null ? { left: panelPos.x, top: panelPos.y, right: 'auto' } : undefined}
+    >
+      <div
+        className={css.header}
+        onPointerDown={(event) => { beginDrag(event, panelRef.current, applyPanelPos) }}
+      >
         <div className={css.headerText}>
           <div className={css.title}>{t('title')}</div>
           <div className={css.subtitle}>{t('subtitle')}</div>
         </div>
-        <div className={css.headerActions}>
+        <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
           <button type="button" className={css.settingsBtn} onClick={() => { actions.setLogOpen(true) }}>
             {t('logs')}
           </button>
@@ -262,19 +350,26 @@ export function TokenQuotaPanel({
         })}
       </div>
       {dialogOpen && (
-        <div className={css.dialogBackdrop} onClick={() => { actions.setDialogOpen(false) }}>
-          <div className={css.dialog} onClick={(event) => { event.stopPropagation() }}>
-            <div className={css.dialogHeader}>
-              <div className={css.dialogTitle}>{t('settingsTitle')}</div>
-              <button
-                type="button"
-                className={css.dialogClose}
-                title={t('close')}
-                onClick={() => { actions.setDialogOpen(false) }}
-              >
-                ×
-              </button>
-            </div>
+        <div
+          ref={settingsRef}
+          className={css.dialog}
+          style={settingsPos !== null ? { left: settingsPos.x, top: settingsPos.y, transform: 'none' } : undefined}
+        >
+          <div
+            className={css.dialogHeader}
+            onPointerDown={(event) => { beginDrag(event, settingsRef.current, setSettingsPos) }}
+          >
+            <div className={css.dialogTitle}>{t('settingsTitle')}</div>
+            <button
+              type="button"
+              className={css.dialogClose}
+              title={t('close')}
+              onClick={() => { actions.setDialogOpen(false) }}
+              onPointerDown={(event) => { event.stopPropagation() }}
+            >
+              ×
+            </button>
+          </div>
             <div className={css.dialogSection}>
               <div className={css.dialogLabel}>{t('monitorLabel')}</div>
               <div className={css.monitorHint}>{t('monitorHint')}</div>
@@ -366,25 +461,31 @@ export function TokenQuotaPanel({
               </div>
             </div>
           </div>
-        </div>
       )}
       {logOpen && (
-        <div className={css.dialogBackdrop} onClick={() => { actions.setLogOpen(false) }}>
-          <div className={css.dialog} onClick={(event) => { event.stopPropagation() }}>
-            <div className={css.dialogHeader}>
-              <div className={css.dialogTitle}>{t('logsTitle')}</div>
-              <button
-                type="button"
-                className={css.dialogClose}
-                title={t('close')}
-                onClick={() => { actions.setLogOpen(false) }}
-              >
-                ×
-              </button>
-            </div>
-            {log !== null && log.entries.length === 0 && (
-              <div className={css.notice}>{t('logEmpty')}</div>
-            )}
+        <div
+          ref={logRef}
+          className={`${css.dialog} ${css.logDialog}`}
+          style={logPos !== null ? { left: logPos.x, top: logPos.y, transform: 'none' } : undefined}
+        >
+          <div
+            className={css.logHeader}
+            onPointerDown={(event) => { beginDrag(event, logRef.current, setLogPos) }}
+          >
+            <div className={css.dialogTitle}>{t('logsTitle')}</div>
+            <button
+              type="button"
+              className={css.dialogClose}
+              title={t('close')}
+              onClick={() => { actions.setLogOpen(false) }}
+            >
+              ×
+            </button>
+          </div>
+          {log !== null && log.entries.length === 0 && (
+            <div className={css.notice}>{t('logEmpty')}</div>
+          )}
+          <div className={css.logScroll}>
             <table className={css.logTable}>
               <thead>
                 <tr>
