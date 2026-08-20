@@ -1,0 +1,10 @@
+# dependencies
+node_modules/
+
+# build output (npm package ships lib/; source repo builds locally)
+lib/
+
+# misc
+.DS_Store
+*.tgz
+*.tsbuildinfo
