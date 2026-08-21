@@ -1,7 +1,7 @@
 {
   "name": "@jxgame2020/dsh-token-quota",
   "description": "Daily per-model token quota accounting, enforcement, and a floating quota panel for the DeepSeek Harness — a fully self-contained plugin (no core-Harness wiring, no generated RPC contract)",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publishConfig": {
     "access": "public"
   },

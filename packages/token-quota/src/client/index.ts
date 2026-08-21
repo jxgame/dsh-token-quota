@@ -113,6 +113,20 @@ export function apply(ctx: ClientContext): void {
 
   const isMonitoredKey = (key: string): boolean => lastMonitored === null || lastMonitored.includes(key)
 
+  /** Transient auto-switch confirmation: shows for a few seconds, then clears. */
+  let fullNoticeTimer: ReturnType<typeof setTimeout> | undefined
+  const flashFullNotice = (message: string): void => {
+    if (fullNoticeTimer !== undefined) {
+      clearTimeout(fullNoticeTimer)
+      fullNoticeTimer = undefined
+    }
+    bound?.setFullNotice(message)
+    fullNoticeTimer = setTimeout(() => {
+      bound?.setFullNotice(null)
+      fullNoticeTimer = undefined
+    }, 6000)
+  }
+
   /** Pick an auto-switch target for the configured strategy. */
   const pickSwitchTarget = (
     snapshot: TokenQuotaSnapshot,
@@ -176,7 +190,7 @@ export function apply(ctx: ClientContext): void {
       ({ result }: { result: SelectModelResult }) => {
         if (result.ok) {
           lastCurrent = result.value.selected
-          bound?.setFullNotice(null)
+          flashFullNotice(t('fullSwitchTo').replace('{model}', target.model))
           pull()
         } else {
           bound?.setFullNotice(t('fullSwitchFailed'))
@@ -292,6 +306,8 @@ export function apply(ctx: ClientContext): void {
       ({ result }: { result: SelectModelResult }) => {
         if (result.ok) {
           lastCurrent = result.value.selected
+          // A manual pick clears any leftover auto-switch / exhausted notice.
+          bound?.setFullNotice(null)
           bound?.setDirectory(lastGroups, result.value.selected)
           // Immediately re-pull the snapshot so the previous model's final
           // usage (credited around the switch) shows without waiting 3 s.
