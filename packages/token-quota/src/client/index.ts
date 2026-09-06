@@ -204,16 +204,35 @@ export function apply(ctx: ClientContext): void {
   // single fact source for usage AND the resolved per-model caps; the panel
   // converges within one poll interval (plus an immediate first pull). Every
   // few pulls we re-read the model directory so a model switch made OUTSIDE
-  // this panel (the official selector, /model) moves the 「当前」 badge too.
+  // this panel (the official selector, /model, or an automatic server-side
+  // switch on full quota) moves the 「当前」 badge without waiting the full
+  // directory-refresh cadence.
   let pullCount = 0
   const refreshCurrent = (): void => {
     if (lastSessionId === undefined) return
     void connection.api.sessions.models({ sessionId: lastSessionId }).then(
       ({ result }: { result: ModelsResult }) => {
         if (result.ok) {
+          const currentChanged = lastCurrent?.provider !== result.value.current?.provider
+            || lastCurrent?.model !== result.value.current?.model
           lastGroups = result.value.groups
           lastCurrent = result.value.current
           bound?.setDirectory(result.value.groups, result.value.current)
+          // If the server silently switched to a different model (e.g. the
+          // auto-switch on quota exhaustion), re-run the full-quota strategy
+          // immediately against the new current model so any further fallback
+          // happens without waiting the next poll.
+          if (currentChanged) {
+            void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
+              response => response.ok ? response.json() as Promise<TokenQuotaSnapshot> : undefined,
+              () => undefined,
+            ).then(snapshot => {
+              if (snapshot !== undefined) {
+                bound?.setSnapshot(snapshot)
+                actOnFull(snapshot)
+              }
+            })
+          }
         }
       },
       () => { /* keep the previous directory on a transient failure */ },
@@ -247,7 +266,7 @@ export function apply(ctx: ClientContext): void {
       bound?.setSnapshot(snapshot)
       actOnFull(snapshot)
     })
-    if (pullCount % 4 === 0) refreshCurrent()
+    if (pullCount % 2 === 0) refreshCurrent()
   }
   ctx.effect(() => {
     pull()

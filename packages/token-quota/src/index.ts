@@ -40,7 +40,7 @@ import z from '@deepseek-ai/schemastery'
 // the service listens to without importing any runtime value.
 import '@deepseek-ai/dsh-agent'
 import { LlmError } from '@deepseek-ai/dsh-llm'
-import type { LlmCallConfig, TokenUsage } from '@deepseek-ai/dsh-llm'
+import type { LlmCallConfig, LlmModelInfo, LlmProviderInfo, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
@@ -156,6 +156,11 @@ export class TokenQuotaService extends Service {
   /** Per-session folded model key from the latest `request/header`. */
   private readonly headerKeys = new WeakMap<Session, string | undefined>()
   private writeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Cached model directory: list of providers and their models, refreshed lazily. */
+  private cachedModels: Array<{ provider: string; model: string }> = []
+  private modelsCachedAt = 0
+  /** How long to reuse the cached model directory before refreshing (30s). */
+  private static readonly MODEL_CACHE_TTL_MS = 30_000
   /** Disposer for the optional HTTP snapshot route (`GET /token-quota`). */
   private disposeRoute: (() => void) | undefined
   /** Disposer for the optional usage-history route (`GET /token-quota/log`). */
@@ -239,10 +244,16 @@ export class TokenQuotaService extends Service {
       this.onSessionEvent(session, event)
     })
 
-    // Enforcement + accounting lock: the waterfall's resolved config is the
-    // authoritative model for this request — bind it to the agent's session
-    // so a model switch mid-flight never misattributes the in-flight reply.
-    ctx.on('agent/request', async (payload, next) => this.onRequest(payload, next))
+    // For every newly created agent, install an agent-scoped enforcement
+    // listener that runs AFTER the api-proxy's model-selection listener (so
+    // user selections always apply first), and is therefore the last word on
+    // the chosen provider/model. When the resolved model is at its cap and
+    // the configured strategy allows an automatic switch, it rewrites the
+    // call config to a suitable replacement model instead of throwing, so
+    // the turn proceeds uninterrupted.
+    ctx.on('agent/created', ({ agent }) => {
+      agent.ctx.on('agent/request', async (payload, next) => this.onRequest(payload, next))
+    })
 
     ctx.effect(() => () => { this.disposeLocal() }, 'token-quota: flush on unload')
   }
@@ -351,6 +362,103 @@ export class TokenQuotaService extends Service {
     }
   }
 
+  /**
+   * Refresh the cached list of all registered providers and their advertised
+   * models. Re-uses a still-fresh cache; any provider discovery failure is
+   * swallowed — we'd rather miss a candidate than crash the request waterfall.
+   */
+  private async refreshModels(): Promise<void> {
+    const now = Date.now()
+    if (this.cachedModels.length > 0 && now - this.modelsCachedAt < TokenQuotaService.MODEL_CACHE_TTL_MS) {
+      return
+    }
+    const llm = this.ctx.get('llm') as {
+      listProviders: () => LlmProviderInfo[]
+      listModels: (provider: string) => Promise<readonly LlmModelInfo[]>
+    } | undefined
+    if (llm === undefined) {
+      this.cachedModels = []
+      this.modelsCachedAt = now
+      return
+    }
+    const next: Array<{ provider: string; model: string }> = []
+    for (const provider of llm.listProviders()) {
+      try {
+        const models = await llm.listModels(provider.id)
+        for (const model of models) {
+          next.push({ provider: provider.id, model: model.id })
+        }
+      } catch (error: unknown) {
+        // Transient provider failure — keep whatever we already have for that
+        // provider and continue with the others.
+        this.ctx.logger.debug?.('token-quota: failed to list models for provider "%s": %o', provider.id, error)
+      }
+    }
+    this.cachedModels = next
+    this.modelsCachedAt = now
+  }
+
+  /**
+   * Choose a replacement model for the exhausted current model according to
+   * the configured `onFull` strategy. Returns `undefined` when no eligible
+   * candidate exists (caller falls back to the historical stop-and-throw).
+   */
+  private pickReplacementModel(currentKey: string): { provider: string; model: string; key: string } | undefined {
+    const doc = this.settingsSource()
+    const onFull = doc.onFull ?? 'stop'
+    if (onFull === 'stop') return undefined
+    if (this.cachedModels.length === 0) return undefined
+
+    const availability = (key: string): { limit: number; used: number } => {
+      const limit = this.limitOf(key)
+      const used = this.usage[key] ?? 0
+      return { limit, used }
+    }
+    const isMonitored = (key: string): boolean => this.isMonitored(key)
+    const isAvailable = (key: string): boolean => {
+      if (!isMonitored(key)) return false
+      const { limit, used } = availability(key)
+      return limit <= 0 || used < limit
+    }
+
+    // Build candidate list excluding the currently exhausted model.
+    const candidates = this.cachedModels
+      .filter(({ provider, model }) => tokenQuotaKey(provider, model) !== currentKey)
+      .map(({ provider, model }) => {
+        const key = tokenQuotaKey(provider, model)
+        const { limit, used } = availability(key)
+        return { provider, model, key, limit, used, monitored: isMonitored(key) }
+      })
+
+    switch (onFull) {
+      case 'switchQuota': {
+        // Another monitored, capped model that still has headroom, sorted by
+        // lowest fill ratio so we spread load across capped models evenly.
+        const eligible = candidates
+          .filter(c => c.monitored && c.limit > 0 && c.used < c.limit)
+          .sort((a, b) => (a.used / a.limit) - (b.used / b.limit))
+        return eligible[0]
+      }
+      case 'switchAll': {
+        // Any monitored model that has headroom (capped or unlimited).
+        const eligible = candidates.filter(c => isAvailable(c.key))
+        return eligible[0]
+      }
+      case 'switchPriority': {
+        // 1. Unlimited monitored models. 2. Unmonitored models (never capped).
+        // 3. Capped-but-free monitored models.
+        const uncapped = candidates.find(c => c.monitored && c.limit <= 0)
+        if (uncapped !== undefined) return uncapped
+        const unmonitored = candidates.find(c => !c.monitored)
+        if (unmonitored !== undefined) return unmonitored
+        const free = candidates.find(c => isAvailable(c.key))
+        return free
+      }
+      default:
+        return undefined
+    }
+  }
+
   private async onRequest(
     payload: { agent: { session: Session } },
     next: () => Promise<LlmCallConfig>,
@@ -368,6 +476,30 @@ export class TokenQuotaService extends Service {
     if (limit <= 0) return config
     const used = this.usage[key] ?? 0
     if (used < limit) return config
+
+    // Current model is at or over cap. Try an automatic switch when the
+    // configured strategy allows it and a candidate exists; otherwise fall
+    // through to the historical hard stop.
+    await this.refreshModels()
+    const replacement = this.pickReplacementModel(key)
+    if (replacement !== undefined) {
+      this.ctx.logger.info(
+        'token-quota: "%s" is full (%d/%d); auto-switching to "%s" (%s strategy).',
+        key, used, limit, replacement.key, this.settingsSource().onFull,
+      )
+      this.headerKeys.set(payload.agent.session, replacement.key)
+      // Invalidate the cached directory so the next request re-discovers any
+      // newly-registered models and so the next client-side poll sees the
+      // switch reflected without waiting a full TTL.
+      this.modelsCachedAt = 0
+      this.cachedModels = []
+      return {
+        ...config,
+        provider: replacement.provider,
+        model: replacement.model,
+      }
+    }
+
     throw new LlmError(
       `Daily token limit reached for "${provider}/${model}": ${used}/${limit} tokens used today. `
       + 'Switch model in the quota panel or raise its limit.',
