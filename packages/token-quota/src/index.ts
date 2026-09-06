@@ -68,6 +68,10 @@ declare module '@deepseek-ai/cordis' {
 const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   limits: z.dict(z.number().step(1).min(0)).default({}),
   monitored: z.array(z.string()).default([]),
+  // `switchPriority` is a legacy value accepted for documents saved by older
+  // plugin versions; the runtime normalizes it to `switchAll` (see
+  // settingsSource below) so existing users keep auto-switching behavior
+  // without reconfiguring.
   onFull: z.union(['stop', 'switchQuota', 'switchAll', 'switchPriority']).default('stop'),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
@@ -191,7 +195,9 @@ export class TokenQuotaService extends Service {
           return {
             limits: doc.limits ?? {},
             monitored: doc.monitored ?? [],
-            onFull: doc.onFull ?? 'stop',
+            // Legacy `switchPriority` (removed in 0.1.7) maps to `switchAll`:
+            // capped models first, then uncapped — both monitored-only.
+            onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
             reset: doc.reset ?? undefined,
           }
         }
@@ -415,11 +421,6 @@ export class TokenQuotaService extends Service {
       return { limit, used }
     }
     const isMonitored = (key: string): boolean => this.isMonitored(key)
-    const isAvailable = (key: string): boolean => {
-      if (!isMonitored(key)) return false
-      const { limit, used } = availability(key)
-      return limit <= 0 || used < limit
-    }
 
     // Build candidate list excluding the currently exhausted model.
     const candidates = this.cachedModels
@@ -440,19 +441,15 @@ export class TokenQuotaService extends Service {
         return eligible[0]
       }
       case 'switchAll': {
-        // Any monitored model that has headroom (capped or unlimited).
-        const eligible = candidates.filter(c => isAvailable(c.key))
-        return eligible[0]
-      }
-      case 'switchPriority': {
-        // 1. Unlimited monitored models. 2. Unmonitored models (never capped).
-        // 3. Capped-but-free monitored models.
-        const uncapped = candidates.find(c => c.monitored && c.limit <= 0)
-        if (uncapped !== undefined) return uncapped
-        const unmonitored = candidates.find(c => !c.monitored)
-        if (unmonitored !== undefined) return unmonitored
-        const free = candidates.find(c => isAvailable(c.key))
-        return free
+        // Monitored models only. Capped models with headroom first (lowest
+        // fill ratio wins, spreading load), then uncapped monitored models as
+        // fallback — quotas are preferred, uncapped only when every capped
+        // monitored model is exhausted.
+        const cappedFree = candidates
+          .filter(c => c.monitored && c.limit > 0 && c.used < c.limit)
+          .sort((a, b) => (a.used / a.limit) - (b.used / b.limit))
+        if (cappedFree.length > 0) return cappedFree[0]
+        return candidates.find(c => c.monitored && c.limit <= 0)
       }
       default:
         return undefined

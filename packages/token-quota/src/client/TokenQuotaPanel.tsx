@@ -74,7 +74,6 @@ const FULL_ACTIONS: ReadonlyArray<{ value: TokenQuotaFullAction; labelKey: Token
   { value: 'stop', labelKey: 'fullStop' },
   { value: 'switchQuota', labelKey: 'fullSwitchQuota' },
   { value: 'switchAll', labelKey: 'fullSwitchAll' },
-  { value: 'switchPriority', labelKey: 'fullSwitchPriority' },
 ]
 
 /** One absolute screen position (left/top for a fixed-positioned element). */

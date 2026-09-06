@@ -19,10 +19,10 @@ export const TOKEN_QUOTA_EXCEEDED_CODE = 'TOKEN_QUOTA_EXCEEDED'
 
 /**
  * What to do once a monitored, quota-capped model reaches its daily cap.
- * Selected in the panel's settings dialog; the panel acts on it (b/c/d auto
+ * Selected in the panel's settings dialog; the panel acts on it (b/c auto
  * switch, a stops and prompts).
  */
-export const TOKEN_QUOTA_FULL_ACTIONS = ['stop', 'switchQuota', 'switchAll', 'switchPriority'] as const
+export const TOKEN_QUOTA_FULL_ACTIONS = ['stop', 'switchQuota', 'switchAll'] as const
 
 /** One of the {@link TOKEN_QUOTA_FULL_ACTIONS} values. */
 export type TokenQuotaFullAction = typeof TOKEN_QUOTA_FULL_ACTIONS[number]
@@ -65,8 +65,9 @@ export interface TokenQuotaSettings {
   /**
    * Behavior when a monitored, capped model hits its daily cap:
    * `'stop'` stops and prompts, `'switchQuota'` auto-switches to another
-   * capped-but-available model, `'switchAll'` switches to any other available
-   * model, `'switchPriority'` prefers uncapped models then unmonitored ones.
+   * monitored capped-but-available model, `'switchAll'` auto-switches to
+   * another monitored available model — capped models first, uncapped ones
+   * as fallback. Only monitored models ever participate in a switch.
    */
   onFull: TokenQuotaFullAction
   /**

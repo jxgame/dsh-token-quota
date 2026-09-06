@@ -14,11 +14,10 @@ Zero changes to the DSH core repo: no core file is modified, no official bundle 
   **Per-model counting**: input + output + cache tokens all count toward the daily usage, persisted to `$DSH_HOME/token-quota.json` across restarts.
 - **硬拦截**：达到上限后请求直接停止并提示切换，不会继续消耗额度。
   **Hard enforcement**: once a cap is hit, requests are stopped and you are prompted to switch — no extra tokens are spent.
-- **满额策略**（四选一，面板设置里切换，即时生效）/ **Full-quota strategy** (pick one in the panel settings; applies immediately):
+- **满额策略**（三选一，面板设置里切换，即时生效）/ **Full-quota strategy** (pick one in the panel settings; applies immediately):
   - 停止请求并提示 / Stop and prompt
-  - 自动切换到其它已监控且未满的限额模型 / Auto-switch to another monitored, capped-but-available model
-  - 自动切换到其它任意可用模型（含非限额）/ Auto-switch to any other available model (incl. uncapped)
-  - 自动切换（优先非限额，其次未监控）/ Prefer uncapped models, then unmonitored ones
+  - 自动切换到其它已监控且未满的限额模型（找不到则报错）/ Auto-switch to another monitored, capped-but-available model (errors when none)
+  - 自动切换到其它已监控模型（优先限额未满，其次非限额兜底）/ Auto-switch to another monitored model — capped models with headroom first, uncapped ones as fallback
 - **每日自动重置**：默认本机时区午夜；可在设置里改为任意时区（UTC−12 ~ +14）与时刻（0:00–23:55），到点清零当日计数并归档用量日志。
   **Daily auto-reset**: defaults to local midnight; pick any timezone (UTC−12 ~ +14) and time (0:00–23:55) in settings — counters reset and the finished day is archived into the usage log.
 - **用量日志**：每模型每天一条（日期 / 模型 / 用量），与监控勾选无关。
@@ -96,8 +95,8 @@ For modifying the source, offline distribution, or code review. The source repo 
 ## 使用 / Usage
 
 - 头部「设置」弹窗（改动即时自动保存，右上角 × 关闭）/ The header Settings dialog (changes auto-save instantly; close with × at the top-right):
-  - **监控模型** / **Monitored models**：勾选要监控的模型（默认全部）。未勾选的模型不显示、不计入当日用量、不受限额拦截（切换时仍可选）。/ Check the models to monitor (all by default). Unchecked models are hidden, not metered, and never capped (they remain selectable).
-  - **满额后处理** / **When a model is full**：四选一（见上文「功能」）。/ one of four strategies (see Features above).
+  - **监控模型** / **Monitored models**：勾选要监控的模型（默认全部）。未勾选的模型不显示、不计入当日用量、不受限额拦截，也不会成为自动切换的目标。/ Check the models to monitor (all by default). Unchecked models are hidden, not metered, never capped, and never picked as an auto-switch target.
+  - **满额后处理** / **When a model is full**：三选一（见上文「功能」）。/ one of three strategies (see Features above).
   - **每日重置时间** / **Daily reset**：时区（UTC−12 ~ UTC+14）与时刻（0:00–23:55，5 分钟步进），到点自动清零；不设置则沿用「本机时区午夜」。/ timezone (UTC−12 ~ UTC+14) and time (0:00–23:55, 5-min steps); defaults to machine-local midnight.
 - 头部「日志」按钮（设置左侧）：用量日志弹窗，表格列出日期 / 模型 / 用量，每模型每天一条。/ The Logs button (left of Settings) opens the usage-log dialog: date / model / usage, one row per model per day.
 - 模型行 / Model rows:

@@ -148,22 +148,23 @@ export function apply(ctx: ClientContext): void {
         })
       }
     }
-    const available = (candidate: typeof candidates[number]): boolean =>
-      isMonitoredKey(candidate.key) && (candidate.limit <= 0 || candidate.used < candidate.limit)
+    const cappedFree = (candidate: typeof candidates[number]): boolean =>
+      isMonitoredKey(candidate.key) && candidate.limit > 0 && candidate.used < candidate.limit
     if (lastOnFull === 'switchQuota') {
       return candidates
-        .filter(candidate => isMonitoredKey(candidate.key) && candidate.limit > 0 && candidate.used < candidate.limit)
+        .filter(cappedFree)
         .sort((a, b) => (a.used / a.limit) - (b.used / b.limit))[0]
     }
     if (lastOnFull === 'switchAll') {
-      return candidates.filter(available)[0]
+      // Monitored only: capped models with headroom first (lowest fill ratio),
+      // then uncapped monitored models as fallback.
+      const withQuota = candidates
+        .filter(cappedFree)
+        .sort((a, b) => (a.used / a.limit) - (b.used / b.limit))
+      if (withQuota.length > 0) return withQuota[0]
+      return candidates.find(candidate => isMonitoredKey(candidate.key) && candidate.limit <= 0)
     }
-    // switchPriority: uncapped first, then unmonitored, then capped-but-free.
-    const uncapped = candidates.find(candidate => isMonitoredKey(candidate.key) && candidate.limit <= 0)
-    if (uncapped !== undefined) return uncapped
-    const unmonitored = candidates.find(candidate => !isMonitoredKey(candidate.key))
-    if (unmonitored !== undefined) return unmonitored
-    return candidates.find(available)
+    return undefined
   }
 
   /** Run the configured full-quota strategy once per exhausted model. */
@@ -242,7 +243,11 @@ export function apply(ctx: ClientContext): void {
     pullCount += 1
     const doc = scope.getSnapshot().value
     lastMonitored = doc?.monitored !== undefined && doc.monitored.length > 0 ? doc.monitored : null
-    lastOnFull = doc?.onFull ?? 'stop'
+    // Legacy `switchPriority` (removed in 0.1.7) maps to `switchAll`.
+    // The runtime document may still hold the old value until the user
+    // re-saves the settings dialog.
+    const rawOnFull = (doc?.onFull ?? 'stop') as string
+    lastOnFull = rawOnFull === 'switchPriority' ? 'switchAll' : (rawOnFull as TokenQuotaFullAction)
     lastReset = doc?.reset !== undefined && doc.reset !== null
       && typeof doc.reset === 'object'
       && typeof (doc.reset as TokenQuotaReset).offsetHours === 'number'
