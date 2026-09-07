@@ -76,6 +76,12 @@ export interface TokenQuotaSettings {
    */
   checkUpdates: boolean
   /**
+   * Client-side appearance preference: dim the floating panel while the
+   * pointer is away (and more while typing) so the content behind stays
+   * readable. `false` by default — the panel stays fully opaque.
+   */
+  dimWhenIdle: boolean
+  /**
    * Daily reset moment (timezone + clock time). Absent = machine-local
    * midnight (the historical behaviour).
    */

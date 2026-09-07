@@ -256,6 +256,7 @@ export function apply(ctx: ClientContext): void {
       : null
     bound?.setSettings(lastMonitored, lastOnFull)
     bound?.setCheckUpdates(doc?.checkUpdates ?? true)
+    bound?.setDimWhenIdle(doc?.dimWhenIdle ?? false)
     bound?.setReset(lastReset)
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
@@ -326,6 +327,11 @@ export function apply(ctx: ClientContext): void {
   const setCheckUpdates = (enabled: boolean): void => {
     bound?.setCheckUpdates(enabled)
     void scope.set('checkUpdates', enabled)
+  }
+
+  const setDimWhenIdle = (enabled: boolean): void => {
+    bound?.setDimWhenIdle(enabled)
+    void scope.set('dimWhenIdle', enabled)
   }
 
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
@@ -424,7 +430,7 @@ export function apply(ctx: ClientContext): void {
     bound = actions
     return {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
-      setCheckUpdates, checkUpdatesNow, clearLogBefore,
+      setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
     }
   }
 

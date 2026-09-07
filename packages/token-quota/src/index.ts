@@ -182,6 +182,8 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   // without reconfiguring.
   onFull: z.union(['stop', 'switchQuota', 'switchAll', 'switchPriority']).default('stop'),
   checkUpdates: z.boolean().default(true),
+  // Client-side appearance preference; the host only stores it.
+  dimWhenIdle: z.boolean().default(false),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
@@ -265,7 +267,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -322,6 +324,7 @@ export class TokenQuotaService extends Service {
             // capped models first, then uncapped — both monitored-only.
             onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
             checkUpdates: doc.checkUpdates ?? true,
+            dimWhenIdle: doc.dimWhenIdle ?? false,
             reset: doc.reset ?? undefined,
           }
         }

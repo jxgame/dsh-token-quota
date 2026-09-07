@@ -48,6 +48,8 @@ export interface TokenQuotaPanelInjected {
   setReset: (reset: TokenQuotaReset | null) => void
   /** Persist whether the Host may check npm for newer versions. */
   setCheckUpdates: (enabled: boolean) => void
+  /** Persist whether the panel dims while the pointer is away / typing. */
+  setDimWhenIdle: (enabled: boolean) => void
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
   /** Ask the Host to clear log entries before a date, then refresh the log. */
@@ -144,7 +146,7 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -187,6 +189,7 @@ export function TokenQuotaPanel({
   const monitored = useStore(s => s.monitored)
   const onFull = useStore(s => s.onFull)
   const checkUpdates = useStore(s => s.checkUpdates)
+  const dimWhenIdle = useStore(s => s.dimWhenIdle)
   const upgrade = useStore(s => s.upgrade)
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
@@ -370,12 +373,12 @@ export function TokenQuotaPanel({
   }
 
   const visibleRows = rows.filter(row => isMonitoredKey(row.key) || row.current)
-  // The panel dims when the pointer is away; dimming is stronger while the
-  // user is typing in an input elsewhere so the text behind stays readable.
-  // While the upgrade banner flashes, the panel is forced opaque.
-  const panelDimClass = hovered || upgradeFlash
-    ? ''
-    : inputActive ? css.panelDimStrong : css.panelDim
+  // The panel dims when the pointer is away ONLY when the user opted in
+  // (settings → 失焦窗口透明). While the upgrade banner flashes, the panel
+  // is forced opaque regardless.
+  const panelDimClass = dimWhenIdle
+    ? (hovered || upgradeFlash ? '' : inputActive ? css.panelDimStrong : css.panelDim)
+    : ''
 
   return (
     <div
@@ -630,6 +633,17 @@ export function TokenQuotaPanel({
                   ))}
                 </select>
               </div>
+            </div>
+            <div className={css.dialogSection}>
+              <label className={css.checkUpdatesLabel}>
+                <input
+                  type="checkbox"
+                  checked={dimWhenIdle}
+                  onChange={(event) => { setDimWhenIdle(event.target.checked) }}
+                />
+                <span>{t('dimWhenIdleLabel')}</span>
+              </label>
+              <div className={css.dialogHint}>{t('dimWhenIdleHint')}</div>
             </div>
             <div className={css.dialogSection}>
               <div className={css.checkUpdatesRow}>

@@ -544,6 +544,13 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+.dialogHint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--dsw-alias-label-secondary);
+}
+
 .monitorList {
   display: flex;
   flex-direction: column;

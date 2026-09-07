@@ -20,6 +20,9 @@ import type {
   TokenQuotaUpgrade,
 } from '@jxgame2020/dsh-token-quota/types'
 
+/** Inlined at build time (tsdown `define`) from package.json. */
+declare const __TOKEN_QUOTA_VERSION__: string | undefined
+
 /** Build the stable per-model key shared by the counter, settings, and snapshot. */
 function tokenQuotaKey(provider: string, model: string): string {
   return `${provider}/${model}`
@@ -64,6 +67,8 @@ export interface TokenQuotaPanelState {
   onFull: TokenQuotaFullAction
   /** Whether the Host is allowed to check npm for newer versions. */
   checkUpdates: boolean
+  /** Whether the panel dims while the pointer is away / while typing. */
+  dimWhenIdle: boolean
   /** Latest upgrade availability from the Host; null = up to date or unknown. */
   upgrade: TokenQuotaUpgrade | null
   /** Whether the one-shot upgrade banner was dismissed for the current latest version. */
@@ -106,6 +111,7 @@ export type TokenQuotaPanelActions = {
   setError: (d: TokenQuotaPanelState, error: string | null) => void
   setSettings: (d: TokenQuotaPanelState, monitored: string[] | null, onFull: TokenQuotaFullAction) => void
   setCheckUpdates: (d: TokenQuotaPanelState, checkUpdates: boolean) => void
+  setDimWhenIdle: (d: TokenQuotaPanelState, dimWhenIdle: boolean) => void
   setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
@@ -139,6 +145,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       monitored: null,
       onFull: 'stop',
       checkUpdates: true,
+      dimWhenIdle: false,
       upgrade: null,
       upgradeDismissed: false,
       checkingUpdates: false,
@@ -163,13 +170,23 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setError: (d, error) => { d.error = error },
       setSettings: (d, monitored, onFull) => { d.monitored = monitored; d.onFull = onFull },
       setCheckUpdates: (d, checkUpdates) => { d.checkUpdates = checkUpdates },
+      setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
       setUpgrade: (d, upgrade) => {
+        // Guard against host/client version skew (e.g. the host process still
+        // runs an older bundle after an upgrade): when the reported "latest"
+        // equals the client's own version, there is nothing to upgrade to.
+        // This prevents a confusing `v0.1.16 → v0.1.16` banner.
+        const normalized = upgrade !== null
+          && upgrade.latestVersion !== ''
+          && upgrade.latestVersion !== __TOKEN_QUOTA_VERSION__
+          ? upgrade
+          : null
         // A new latest version re-arms the one-shot banner; the same version
         // stays dismissed until the user dismisses it again (or it changes).
-        if (d.upgrade === null || d.upgrade.latestVersion !== upgrade?.latestVersion) {
+        if (d.upgrade === null || d.upgrade.latestVersion !== normalized?.latestVersion) {
           d.upgradeDismissed = false
         }
-        d.upgrade = upgrade
+        d.upgrade = normalized
       },
       setUpgradeDismissed: (d, dismissed) => { d.upgradeDismissed = dismissed },
       setCheckingUpdates: (d, checking) => { d.checkingUpdates = checking },
