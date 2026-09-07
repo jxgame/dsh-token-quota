@@ -49,6 +49,13 @@ export const zh = {
   resetHint: '选择时区与时间，到点自动清零当日计数',
   resetOffset: '时区',
   resetTime: '时间',
+  upgradeAvailableHint: '有新版本可用',
+  upgradeAvailable: '发现新版本 v{version}，请在终端执行以下命令升级：',
+  copy: '复制',
+  upgradeHint: '升级后请重启 dsh web 并刷新浏览器页面',
+  checkUpdatesLabel: '自动检查更新',
+  checkUpdatesNow: '立即检查',
+  checkingUpdates: '检查中…',
 }
 
 /** Dictionary keys owned by the token-quota panel (a string-literal union). */
@@ -98,4 +105,11 @@ export const en = {
   resetHint: 'Pick a timezone and time; counters reset there',
   resetOffset: 'Timezone',
   resetTime: 'Time',
+  upgradeAvailableHint: 'A new version is available',
+  upgradeAvailable: 'A new version v{version} is available. Run one of the following commands in your terminal to upgrade:',
+  copy: 'Copy',
+  upgradeHint: 'After upgrading, restart dsh web and refresh the browser',
+  checkUpdatesLabel: 'Check for updates automatically',
+  checkUpdatesNow: 'Check now',
+  checkingUpdates: 'Checking…',
 } satisfies Record<TokenQuotaKey, string>

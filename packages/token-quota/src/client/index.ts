@@ -254,6 +254,7 @@ export function apply(ctx: ClientContext): void {
       ? doc.reset as TokenQuotaReset
       : null
     bound?.setSettings(lastMonitored, lastOnFull)
+    bound?.setCheckUpdates(doc?.checkUpdates ?? true)
     bound?.setReset(lastReset)
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
@@ -269,6 +270,7 @@ export function apply(ctx: ClientContext): void {
     ).then((snapshot) => {
       if (snapshot === undefined) return
       bound?.setSnapshot(snapshot)
+      bound?.setUpgrade(snapshot.upgrade ?? null)
       actOnFull(snapshot)
     })
     if (pullCount % 2 === 0) refreshCurrent()
@@ -319,6 +321,35 @@ export function apply(ctx: ClientContext): void {
     void scope.set('onFull', action)
   }
 
+  const setCheckUpdates = (enabled: boolean): void => {
+    bound?.setCheckUpdates(enabled)
+    void scope.set('checkUpdates', enabled)
+  }
+
+  /** Ask the Host to check the registry right now, then refresh the snapshot. */
+  const checkUpdatesNow = (): void => {
+    bound?.setCheckingUpdates(true)
+    void fetch('/token-quota/check-updates', { method: 'POST' }).then(
+      (response) => {
+        if (!response.ok) {
+          bound?.setError(`check-updates route: ${String(response.status)}`)
+          return undefined
+        }
+        return response.json() as Promise<TokenQuotaSnapshot>
+      },
+      () => {
+        bound?.setError('update check failed')
+      },
+    ).then((snapshot) => {
+      if (snapshot !== undefined) {
+        bound?.setSnapshot(snapshot)
+        bound?.setUpgrade(snapshot.upgrade ?? null)
+        actOnFull(snapshot)
+      }
+      bound?.setCheckingUpdates(false)
+    })
+  }
+
   const setReset = (reset: TokenQuotaReset | null): void => {
     lastReset = reset
     bound?.setReset(reset)
@@ -348,7 +379,10 @@ export function apply(ctx: ClientContext): void {
 
   const injected = (actions: BoundActions<typeof store>): TokenQuotaPanelInjected => {
     bound = actions
-    return { load, setLimit, selectModel, setMonitored, setOnFull, setReset }
+    return {
+      load, setLimit, selectModel, setMonitored, setOnFull, setReset,
+      setCheckUpdates, checkUpdatesNow,
+    }
   }
 
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({

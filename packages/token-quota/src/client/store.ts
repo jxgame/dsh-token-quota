@@ -17,6 +17,7 @@ import type {
   TokenQuotaReset,
   TokenQuotaSnapshot,
   TokenQuotaEntry,
+  TokenQuotaUpgrade,
 } from '@jxgame2020/dsh-token-quota/types'
 
 /** Build the stable per-model key shared by the counter, settings, and snapshot. */
@@ -61,6 +62,14 @@ export interface TokenQuotaPanelState {
   monitored: string[] | null
   /** Behavior when a monitored, capped model reaches its daily cap. */
   onFull: TokenQuotaFullAction
+  /** Whether the Host is allowed to check npm for newer versions. */
+  checkUpdates: boolean
+  /** Latest upgrade availability from the Host; null = up to date or unknown. */
+  upgrade: TokenQuotaUpgrade | null
+  /** Whether the one-shot upgrade banner was dismissed for the current latest version. */
+  upgradeDismissed: boolean
+  /** Whether a manual update check is in flight. */
+  checkingUpdates: boolean
   /** Whether the settings dialog is open. */
   dialogOpen: boolean
   /** Full-quota notice shown for the `'stop'` strategy; null when none. */
@@ -80,6 +89,10 @@ export type TokenQuotaPanelActions = {
   setLoading: (d: TokenQuotaPanelState, loading: boolean) => void
   setError: (d: TokenQuotaPanelState, error: string | null) => void
   setSettings: (d: TokenQuotaPanelState, monitored: string[] | null, onFull: TokenQuotaFullAction) => void
+  setCheckUpdates: (d: TokenQuotaPanelState, checkUpdates: boolean) => void
+  setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
+  setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
+  setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
   setDialogOpen: (d: TokenQuotaPanelState, open: boolean) => void
   setFullNotice: (d: TokenQuotaPanelState, notice: string | null) => void
   setReset: (d: TokenQuotaPanelState, reset: TokenQuotaReset | null) => void
@@ -101,6 +114,10 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       error: null,
       monitored: null,
       onFull: 'stop',
+      checkUpdates: true,
+      upgrade: null,
+      upgradeDismissed: false,
+      checkingUpdates: false,
       dialogOpen: false,
       fullNotice: null,
       reset: null,
@@ -113,6 +130,17 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setLoading: (d, loading) => { d.loading = loading },
       setError: (d, error) => { d.error = error },
       setSettings: (d, monitored, onFull) => { d.monitored = monitored; d.onFull = onFull },
+      setCheckUpdates: (d, checkUpdates) => { d.checkUpdates = checkUpdates },
+      setUpgrade: (d, upgrade) => {
+        // A new latest version re-arms the one-shot banner; the same version
+        // stays dismissed until the user dismisses it again (or it changes).
+        if (d.upgrade === null || d.upgrade.latestVersion !== upgrade?.latestVersion) {
+          d.upgradeDismissed = false
+        }
+        d.upgrade = upgrade
+      },
+      setUpgradeDismissed: (d, dismissed) => { d.upgradeDismissed = dismissed },
+      setCheckingUpdates: (d, checking) => { d.checkingUpdates = checking },
       setDialogOpen: (d, open) => { d.dialogOpen = open },
       setFullNotice: (d, notice) => { d.fullNotice = notice },
       setReset: (d, reset) => { d.reset = reset },

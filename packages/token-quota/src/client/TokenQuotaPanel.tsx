@@ -46,6 +46,10 @@ export interface TokenQuotaPanelInjected {
   setOnFull: (action: TokenQuotaFullAction) => void
   /** Persist the daily reset moment (null = machine-local midnight). */
   setReset: (reset: TokenQuotaReset | null) => void
+  /** Persist whether the Host may check npm for newer versions. */
+  setCheckUpdates: (enabled: boolean) => void
+  /** Ask the Host to check the registry right now, then refresh the snapshot. */
+  checkUpdatesNow: () => void
 }
 
 /** Full component props: runtime + store + locale + injected face. */
@@ -138,7 +142,8 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, useStore, actions, useSessions,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow,
+  useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -165,6 +170,10 @@ export function TokenQuotaPanel({
   const current = useStore(s => s.current)
   const monitored = useStore(s => s.monitored)
   const onFull = useStore(s => s.onFull)
+  const checkUpdates = useStore(s => s.checkUpdates)
+  const upgrade = useStore(s => s.upgrade)
+  const upgradeDismissed = useStore(s => s.upgradeDismissed)
+  const checkingUpdates = useStore(s => s.checkingUpdates)
   const reset = useStore(s => s.reset)
   const dialogOpen = useStore(s => s.dialogOpen)
   const logOpen = useStore(s => s.logOpen)
@@ -193,6 +202,22 @@ export function TokenQuotaPanel({
   )
 
   const isMonitoredKey = (key: string): boolean => monitored === null || monitored.includes(key)
+
+  /** Copy text to the clipboard (clipboard API with execCommand fallback). */
+  const copyToClipboard = async (text: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch {
+      const el = document.createElement('textarea')
+      el.value = text
+      el.style.position = 'fixed'
+      el.style.opacity = '0'
+      document.body.appendChild(el)
+      el.select()
+      try { document.execCommand('copy') } catch { /* ignore */ }
+      document.body.removeChild(el)
+    }
+  }
 
   // Fetch the usage log whenever the log dialog opens. Kept ABOVE the
   // collapsed early-return: every hook must run on every render, otherwise
@@ -265,7 +290,15 @@ export function TokenQuotaPanel({
           <div className={css.title}>
             {t('title')}
             {__TOKEN_QUOTA_VERSION__ !== undefined && __TOKEN_QUOTA_VERSION__ !== '' && (
-              <span className={css.version}>v{__TOKEN_QUOTA_VERSION__}</span>
+              upgrade !== null
+                ? (
+                  <span className={`${css.version} ${css.versionNew}`} title={t('upgradeAvailableHint')}>
+                    v{__TOKEN_QUOTA_VERSION__} → v{upgrade.latestVersion}
+                  </span>
+                )
+                : (
+                  <span className={css.version}>v{__TOKEN_QUOTA_VERSION__}</span>
+                )
             )}
           </div>
           <div className={css.subtitle}>{t('subtitle')}</div>
@@ -287,6 +320,30 @@ export function TokenQuotaPanel({
         {error !== null && <div className={css.noticeError}>{error}</div>}
         {fullNotice !== null && (
           <div className={css.fullNotice} role="alert">{fullNotice}</div>
+        )}
+        {upgrade !== null && !upgradeDismissed && (
+          <div className={css.upgradeBanner} role="alert">
+            <div className={css.upgradeBannerText}>
+              {t('upgradeAvailable').replace('{version}', upgrade.latestVersion)}
+            </div>
+            <div className={css.upgradeCommands}>
+              {upgrade.commands.map(cmd => (
+                <div key={cmd} className={css.upgradeCommandRow}>
+                  <code className={css.upgradeCommand}>{cmd}</code>
+                  <button type="button" className={css.copyBtn} onClick={() => { void copyToClipboard(cmd) }}>
+                    {t('copy')}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className={css.upgradeHint}>{t('upgradeHint')}</div>
+            <button
+              type="button"
+              className={css.upgradeClose}
+              onClick={() => { actions.setUpgradeDismissed(true) }}
+              aria-label={t('close')}
+            >×</button>
+          </div>
         )}
         {!loading && error === null && visibleRows.length === 0 && (
           <div className={css.notice}>
@@ -465,6 +522,26 @@ export function TokenQuotaPanel({
                     <option key={minute} value={minute}>{String(minute).padStart(2, '0')} 分</option>
                   ))}
                 </select>
+              </div>
+            </div>
+            <div className={css.dialogSection}>
+              <label className={css.radioRow}>
+                <input
+                  type="checkbox"
+                  checked={checkUpdates}
+                  onChange={(event) => { setCheckUpdates(event.target.checked) }}
+                />
+                <span>{t('checkUpdatesLabel')}</span>
+              </label>
+              <div className={css.checkUpdatesRow}>
+                <button
+                  type="button"
+                  className={css.checkBtn}
+                  disabled={checkingUpdates}
+                  onClick={checkUpdatesNow}
+                >
+                  {checkingUpdates ? t('checkingUpdates') : t('checkUpdatesNow')}
+                </button>
               </div>
             </div>
           </div>

@@ -71,6 +71,11 @@ export interface TokenQuotaSettings {
    */
   onFull: TokenQuotaFullAction
   /**
+   * Whether the Host periodically queries the npm registry for a newer version
+   * and surfaces an update notice in the panel. `true` by default.
+   */
+  checkUpdates: boolean
+  /**
    * Daily reset moment (timezone + clock time). Absent = machine-local
    * midnight (the historical behaviour).
    */
@@ -101,6 +106,26 @@ export interface TokenQuotaEntry {
 }
 
 /**
+ * Upgrade availability, computed by the Host by querying the npm registry and
+ * inspecting the running profile's install layout. Carried on the snapshot so
+ * the panel can render an update notice and copy-ready upgrade commands.
+ */
+export interface TokenQuotaUpgrade {
+  /** Latest published version; the Host only fills this in when it is newer than the running version. */
+  latestVersion: string
+  /**
+   * Upgrade commands to run in the user's terminal, one entry per applicable
+   * shell (macOS/Linux give one bash line; Windows gives cmd and PowerShell).
+   */
+  commands: string[]
+  /**
+   * How this plugin is installed: `registry` = a normal npm dependency (upgrade
+   * via install), `link` = a local source path (upgrade via git pull + rebuild).
+   */
+  installKind: 'registry' | 'link'
+}
+
+/**
  * Full quota snapshot. The Host is the single fact source; the panel replaces
  * its whole view on each pull, so replay is order-independent.
  */
@@ -109,6 +134,8 @@ export interface TokenQuotaSnapshot {
   day: string
   /** Per-model rows, sorted by key. */
   entries: TokenQuotaEntry[]
+  /** Upgrade availability; `null` when no newer version is known. */
+  upgrade: TokenQuotaUpgrade | null
 }
 
 /** One historical daily usage record, shown in the log dialog. */

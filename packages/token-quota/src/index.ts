@@ -30,7 +30,7 @@
  * @module @jxgame2020/dsh-token-quota
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -54,8 +54,116 @@ import {
   type TokenQuotaReset,
   type TokenQuotaSettings,
   type TokenQuotaSnapshot,
+  type TokenQuotaUpgrade,
 } from './types.ts'
 import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
+
+/** Inlined at build time (tsdown `define`) from package.json; undefined in the type-check-only host build. */
+declare const __TOKEN_QUOTA_VERSION__: string | undefined
+
+/** The plugin's package name, used to locate the profile dependency and the registry endpoint. */
+const PACKAGE_NAME = '@jxgame2020/dsh-token-quota'
+
+/** npm registry endpoint for the plugin's latest version. */
+const REGISTRY_LATEST_URL = 'https://registry.npmjs.org/@jxgame2020%2Fdsh-token-quota/latest'
+
+/** How often the Host re-checks for a newer version when update checks are enabled. */
+const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
+
+/** Map a detected package manager to its install verb. */
+function installVerb(manager: string): string {
+  switch (manager) {
+    case 'pnpm': return 'pnpm add'
+    case 'yarn': return 'yarn add'
+    case 'bun': return 'bun add'
+    default: return 'npm install'
+  }
+}
+
+/**
+ * Build the registry upgrade command(s) for the running OS. macOS/Linux get one
+ * bash line; Windows gets a cmd line and a PowerShell line (the Host cannot tell
+ * which shell the user opens, so both are offered).
+ */
+function registryUpgradeCommands(profileDir: string, manager: string): string[] {
+  const verb = installVerb(manager)
+  const target = `${PACKAGE_NAME}@latest`
+  if (process.platform === 'win32') {
+    return [
+      `cd /d "${profileDir}" && ${verb} ${target}`,
+      `cd "${profileDir}"; ${verb} ${target}`,
+    ]
+  }
+  return [`cd "${profileDir}" && ${verb} ${target}`]
+}
+
+/** Build the upgrade command for a local `link:`/`file:` install (git pull + rebuild). */
+function linkUpgradeCommands(linkPath: string): string[] {
+  return [`git -C "${linkPath}" pull`]
+}
+
+/** Detect the profile's package manager from its lockfiles; defaults to npm. */
+function detectManager(dir: string): string {
+  if (existsSync(join(dir, 'pnpm-lock.yaml'))) return 'pnpm'
+  if (existsSync(join(dir, 'yarn.lock'))) return 'yarn'
+  if (existsSync(join(dir, 'package-lock.json'))) return 'npm'
+  if (existsSync(join(dir, 'bun.lockb')) || existsSync(join(dir, 'bun.lock'))) return 'bun'
+  return 'npm'
+}
+
+/**
+ * Locate the profile directory that declares this plugin as a dependency, along
+ * with how it is installed and which package manager manages it. Returns
+ * `undefined` when no profile declares the plugin (e.g. a bundle-managed mount).
+ */
+function findProfile(): { dir: string; installKind: 'registry' | 'link'; linkPath?: string; manager: string } | undefined {
+  const home = process.env.DSH_HOME !== undefined && process.env.DSH_HOME.trim().length > 0
+    ? process.env.DSH_HOME
+    : join(homedir(), '.dsh')
+  const profilesDir = join(home, 'profiles')
+  let names: string[]
+  try {
+    names = readdirSync(profilesDir)
+  } catch {
+    return undefined
+  }
+  for (const name of names) {
+    const dir = join(profilesDir, name)
+    const manifestPath = join(dir, 'package.json')
+    if (!existsSync(manifestPath)) continue
+    let manifest: { dependencies?: Record<string, string> }
+    try {
+      manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies?: Record<string, string> }
+    } catch {
+      continue
+    }
+    const dep = manifest.dependencies?.[PACKAGE_NAME]
+    if (dep === undefined) continue
+    const manager = detectManager(dir)
+    if (dep.startsWith('link:') || dep.startsWith('file:')) {
+      return { dir, installKind: 'link', linkPath: dep.replace(/^(link|file):/, ''), manager }
+    }
+    return { dir, installKind: 'registry', manager }
+  }
+  return undefined
+}
+
+/** True when `latest` is a strictly higher dotted numeric version than `current`. */
+function isNewer(latest: string, current: string): boolean {
+  const parse = (version: string): number[] => version
+    .replace(/^v/, '')
+    .split('.')
+    .map(part => Number.parseInt(part, 10) || 0)
+  const left = parse(latest)
+  const right = parse(current)
+  for (let i = 0; i < Math.max(left.length, right.length); i += 1) {
+    const l = left[i] ?? 0
+    const r = right[i] ?? 0
+    if (l > r) return true
+    if (l < r) return false
+  }
+  return false
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -73,6 +181,7 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   // settingsSource below) so existing users keep auto-switching behavior
   // without reconfiguring.
   onFull: z.union(['stop', 'switchQuota', 'switchAll', 'switchPriority']).default('stop'),
+  checkUpdates: z.boolean().default(true),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
@@ -156,7 +265,15 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop' })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true })
+  /** Whether update checks are enabled (mirrors the settings document). */
+  private checkUpdates = true
+  /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
+  private upgrade: TokenQuotaUpgrade | null = null
+  /** Timer for the periodic update check. */
+  private updateTimer: ReturnType<typeof setTimeout> | undefined
+  /** In-flight update check, to coalesce the periodic and manual triggers. */
+  private upgradeCheck: Promise<void> | undefined
   /** Per-session folded model key from the latest `request/header`. */
   private readonly headerKeys = new WeakMap<Session, string | undefined>()
   private writeTimer: ReturnType<typeof setTimeout> | undefined
@@ -169,6 +286,8 @@ export class TokenQuotaService extends Service {
   private disposeRoute: (() => void) | undefined
   /** Disposer for the optional usage-history route (`GET /token-quota/log`). */
   private disposeRouteLog: (() => void) | undefined
+  /** Disposer for the optional manual-check route (`POST /token-quota/check-updates`). */
+  private disposeRouteCheck: (() => void) | undefined
   /** Disposer for the webServer-arrival watcher when the service mounts later. */
   private disposeRouteWatcher: (() => void) | undefined
 
@@ -198,6 +317,7 @@ export class TokenQuotaService extends Service {
             // Legacy `switchPriority` (removed in 0.1.7) maps to `switchAll`:
             // capped models first, then uncapped — both monitored-only.
             onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
+            checkUpdates: doc.checkUpdates ?? true,
             reset: doc.reset ?? undefined,
           }
         }
@@ -214,6 +334,8 @@ export class TokenQuotaService extends Service {
         this.monitored = doc.monitored !== undefined && doc.monitored.length > 0
           ? new Set(doc.monitored)
           : undefined
+        this.checkUpdates = doc.checkUpdates
+        this.syncUpdateChecking()
         if (doc.reset !== undefined
           && typeof doc.reset === 'object'
           && doc.reset !== null
@@ -267,6 +389,11 @@ export class TokenQuotaService extends Service {
       )
     })
 
+    // Update checks: start the periodic registry poll now (idempotent — the
+    // settings onChange above may already have started it once the document
+    // resolved; this guarantees a check even when the document arrives later).
+    this.syncUpdateChecking()
+
     ctx.effect(() => () => { this.disposeLocal() }, 'token-quota: flush on unload')
   }
 
@@ -296,6 +423,89 @@ export class TokenQuotaService extends Service {
         res.end(body)
       },
     })
+    this.disposeRouteCheck = server.register({
+      kind: 'exact',
+      path: '/token-quota/check-updates',
+      handler: (_req, res) => {
+        void this.refreshUpgrade().finally(() => {
+          const body = JSON.stringify(this.readSnapshot())
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          res.end(body)
+        })
+      },
+    })
+  }
+
+  /** Query the npm registry and rebuild the cached upgrade info (coalesced). */
+  private refreshUpgrade(): Promise<void> {
+    if (!this.checkUpdates) {
+      this.upgrade = null
+      return Promise.resolve()
+    }
+    if (this.upgradeCheck !== undefined) return this.upgradeCheck
+    this.upgradeCheck = this.doRefreshUpgrade().finally(() => {
+      this.upgradeCheck = undefined
+    })
+    return this.upgradeCheck
+  }
+
+  private async doRefreshUpgrade(): Promise<void> {
+    const current = __TOKEN_QUOTA_VERSION__
+    if (current === undefined || current === '') {
+      this.upgrade = null
+      return
+    }
+    let latest: string | undefined
+    try {
+      const response = await fetch(REGISTRY_LATEST_URL, {
+        headers: { accept: 'application/vnd.npm.install-v1+json' },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (!response.ok) {
+        this.upgrade = null
+        return
+      }
+      const manifest = await response.json() as { version?: string }
+      latest = typeof manifest.version === 'string' ? manifest.version : undefined
+    } catch {
+      // Offline / registry failure: keep showing nothing rather than erroring.
+      this.upgrade = null
+      return
+    }
+    if (latest === undefined || !isNewer(latest, current)) {
+      this.upgrade = null
+      return
+    }
+    const profile = findProfile()
+    const commands = profile === undefined
+      ? []
+      : profile.installKind === 'link'
+        ? linkUpgradeCommands(profile.linkPath ?? profile.dir)
+        : registryUpgradeCommands(profile.dir, profile.manager)
+    this.upgrade = {
+      latestVersion: latest,
+      commands,
+      installKind: profile?.installKind ?? 'registry',
+    }
+  }
+
+  /** Start or stop the periodic update check to match the current setting. */
+  private syncUpdateChecking(): void {
+    if (this.updateTimer !== undefined) {
+      clearTimeout(this.updateTimer)
+      this.updateTimer = undefined
+    }
+    if (!this.checkUpdates) {
+      this.upgrade = null
+      return
+    }
+    // Immediate first check on startup, then a periodic re-check.
+    void this.refreshUpgrade()
+    this.updateTimer = setTimeout(() => {
+      this.updateTimer = undefined
+      void this.refreshUpgrade()
+      this.syncUpdateChecking()
+    }, UPDATE_CHECK_INTERVAL_MS)
   }
 
   /** Read the full per-cycle usage history (log dialog data). */
@@ -336,7 +546,7 @@ export class TokenQuotaService extends Service {
       })
     }
     entries.sort((left, right) => left.key.localeCompare(right.key))
-    return { day: this.cycle, entries }
+    return { day: this.cycle, entries, upgrade: this.upgrade }
   }
 
   /** Today's used tokens for one model key, or `0`. */
@@ -578,9 +788,14 @@ export class TokenQuotaService extends Service {
   }
 
   private disposeLocal(): void {
+    if (this.updateTimer !== undefined) {
+      clearTimeout(this.updateTimer)
+      this.updateTimer = undefined
+    }
     if (this.disposeRouteWatcher !== undefined) this.disposeRouteWatcher()
     if (this.disposeRoute !== undefined) this.disposeRoute()
     if (this.disposeRouteLog !== undefined) this.disposeRouteLog()
+    if (this.disposeRouteCheck !== undefined) this.disposeRouteCheck()
     this.flush()
   }
 

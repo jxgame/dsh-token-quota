@@ -57,6 +57,14 @@
   white-space: nowrap;
 }
 
+.versionNew {
+  color: var(--dsw-alias-status-warning-foreground, #b56900);
+  background: var(--dsw-alias-status-warning-background, #fff6d7);
+  padding: 1px 6px;
+  border-radius: 4px;
+  cursor: default;
+}
+
 .subtitle {
   font-size: 11px;
   color: var(--dsw-alias-label-secondary);
@@ -307,6 +315,115 @@
   background: var(--dsw-alias-bg-layer-1);
   border: 1px solid var(--dsw-alias-state-error-primary);
   border-radius: 8px;
+}
+
+/* Update-available banner. */
+.upgradeBanner {
+  position: relative;
+  margin: 6px 12px;
+  padding: 10px 30px 10px 10px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.1));
+  border-radius: 8px;
+}
+
+.upgradeBannerText {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.upgradeCommands {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.upgradeCommandRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.upgradeCommand {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 4px 6px;
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.copyBtn {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.copyBtn:hover {
+  background: var(--dsw-alias-bg-layer-3, rgba(0,0,0,0.08));
+}
+
+.upgradeHint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.upgradeClose {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.upgradeClose:hover {
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+}
+
+/* Check-updates control (settings dialog). */
+.checkUpdatesRow {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkBtn {
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.checkBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-layer-3, rgba(0,0,0,0.08));
+}
+
+.checkBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 /* Settings / log dialog: a viewport-fixed draggable window. It starts

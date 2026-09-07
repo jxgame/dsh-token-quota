@@ -59,6 +59,9 @@ const hostConfig: UserConfig = {
   fixedExtension: false,
   dts: false,
   clean: false,
+  define: {
+    '__TOKEN_QUOTA_VERSION__': JSON.stringify(PACKAGE_VERSION),
+  },
 }
 
 /** Browser bundle: closure-factory artifact for the web module loader. */
