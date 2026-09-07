@@ -29,6 +29,9 @@ import type { TokenQuotaKey } from './locales.ts'
 import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import css from './TokenQuotaPanel.module.css'
 
+/** Inlined at build time (tsdown `define`) from package.json; undefined in the type-check-only host build. */
+declare const __TOKEN_QUOTA_VERSION__: string | undefined
+
 /** Injected business face: data loading and mutations wired in `apply`. */
 export interface TokenQuotaPanelInjected {
   /** Refresh the model directory for one session. */
@@ -259,7 +262,12 @@ export function TokenQuotaPanel({
         onPointerDown={(event) => { beginDrag(event, panelRef.current, applyPanelPos) }}
       >
         <div className={css.headerText}>
-          <div className={css.title}>{t('title')}</div>
+          <div className={css.title}>
+            {t('title')}
+            {__TOKEN_QUOTA_VERSION__ !== undefined && __TOKEN_QUOTA_VERSION__ !== '' && (
+              <span className={css.version}>v{__TOKEN_QUOTA_VERSION__}</span>
+            )}
+          </div>
           <div className={css.subtitle}>{t('subtitle')}</div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>

@@ -6,10 +6,15 @@
  * plugins, restated here so the plugin builds and ships on its own.
  */
 import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import type { UserConfig } from 'tsdown'
 import { transform } from 'lightningcss'
+
+/** The plugin's own version, read at build time and inlined into the client bundle. */
+const PACKAGE_VERSION = (JSON.parse(
+  readFileSync(new URL('./package.json', import.meta.url), 'utf8'),
+) as { version?: string }).version ?? '0.0.0'
 
 /** Browser modules resolved from the loader module table (externals). */
 const PLATFORM_MODULES = [
@@ -71,6 +76,7 @@ const clientConfig: UserConfig = {
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV ?? 'production'),
     'import.meta.env.MODE': JSON.stringify(process.env.NODE_ENV ?? 'production'),
     'import.meta.env': JSON.stringify({ MODE: process.env.NODE_ENV ?? 'production' }),
+    '__TOKEN_QUOTA_VERSION__': JSON.stringify(PACKAGE_VERSION),
   },
   noExternal: (id: string) => (CLIENT_EXTERNALS.includes(id) ? undefined : true),
   plugins: [{

@@ -45,6 +45,16 @@
   font-size: 13px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.version {
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
 }
 
 .subtitle {
