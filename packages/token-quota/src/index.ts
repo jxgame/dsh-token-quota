@@ -30,7 +30,7 @@
  * @module @jxgame2020/dsh-token-quota
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -102,13 +102,55 @@ function linkUpgradeCommands(linkPath: string): string[] {
   return [`git -C "${linkPath}" pull`]
 }
 
-/** Detect the profile's package manager from its lockfiles; defaults to npm. */
+/**
+ * Detect the profile's package manager; defaults to npm.
+ *
+ * Lockfiles alone are unreliable: a profile can accumulate several of them over
+ * time (e.g. a leftover `pnpm-lock.yaml` next to a fresh `package-lock.json`
+ * after switching from pnpm to npm), and a bare existence check then reports
+ * the WRONG manager. Instead, look at the installer fingerprints inside
+ * `node_modules` — each manager leaves a marker when it actually installs —
+ * and pick the most recently touched one. Only if no marker exists fall back
+ * to comparing lockfile mtimes.
+ */
 function detectManager(dir: string): string {
-  if (existsSync(join(dir, 'pnpm-lock.yaml'))) return 'pnpm'
-  if (existsSync(join(dir, 'yarn.lock'))) return 'yarn'
-  if (existsSync(join(dir, 'package-lock.json'))) return 'npm'
-  if (existsSync(join(dir, 'bun.lockb')) || existsSync(join(dir, 'bun.lock'))) return 'bun'
-  return 'npm'
+  const stat = (path: string): number | undefined => {
+    try {
+      return statSync(path).mtimeMs
+    } catch {
+      return undefined
+    }
+  }
+  // Installer fingerprints inside node_modules, by manager.
+  const fingerprints: Array<[string, string]> = [
+    ['node_modules/.pnpm', 'pnpm'],
+    ['node_modules/.bun', 'bun'],
+    ['node_modules/.package-lock.json', 'npm'],
+    ['node_modules/.yarn-integrity', 'yarn'],
+  ]
+  let best: { manager: string; mtime: number } | undefined
+  for (const [rel, manager] of fingerprints) {
+    const mtime = stat(join(dir, rel))
+    if (mtime !== undefined && (best === undefined || mtime > best.mtime)) {
+      best = { manager, mtime }
+    }
+  }
+  if (best !== undefined) return best.manager
+  // Fallback: the most recently modified lockfile.
+  const lockfiles: Array<[string, string]> = [
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['package-lock.json', 'npm'],
+    ['bun.lockb', 'bun'],
+    ['bun.lock', 'bun'],
+  ]
+  for (const [rel, manager] of lockfiles) {
+    const mtime = stat(join(dir, rel))
+    if (mtime !== undefined && (best === undefined || mtime > best.mtime)) {
+      best = { manager, mtime }
+    }
+  }
+  return best?.manager ?? 'npm'
 }
 
 /**
@@ -130,7 +172,11 @@ function findProfile(): { dir: string; installKind: 'registry' | 'link'; linkPat
   for (const name of names) {
     const dir = join(profilesDir, name)
     const manifestPath = join(dir, 'package.json')
-    if (!existsSync(manifestPath)) continue
+    try {
+      if (!statSync(manifestPath).isFile()) continue
+    } catch {
+      continue
+    }
     let manifest: { dependencies?: Record<string, string> }
     try {
       manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { dependencies?: Record<string, string> }
