@@ -491,8 +491,11 @@ export class TokenQuotaService extends Service {
     }
     let latest: string | undefined
     try {
+      // NOTE: do NOT send `accept: application/vnd.npm.install-v1+json` here —
+      // that install-manifest media type gets 406 from some proxies/mirrors/CDNs.
+      // Plain JSON works everywhere and still carries the `version` field.
       const response = await fetch(REGISTRY_LATEST_URL, {
-        headers: { accept: 'application/vnd.npm.install-v1+json' },
+        headers: { accept: 'application/json' },
         signal: AbortSignal.timeout(10_000),
       })
       if (!response.ok) {
