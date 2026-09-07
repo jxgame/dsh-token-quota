@@ -401,13 +401,27 @@
 
 /* Check-updates control (settings dialog). */
 .checkUpdatesRow {
-  margin-top: 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.checkUpdatesLabel {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.checkUpdatesLabel input {
+  margin: 0;
 }
 
 .checkBtn {
+  flex: none;
   font-size: 12px;
   padding: 4px 10px;
   border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
@@ -415,6 +429,9 @@
   background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  white-space: nowrap;
+  min-width: 72px;
+  text-align: center;
 }
 
 .checkBtn:hover:not(:disabled) {
@@ -675,4 +692,141 @@
   min-height: 0;
   overflow: auto;
   padding: 0 14px 14px;
+}
+
+/* Log toolbar: search box + clear button, between title and close. */
+.logToolbar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.logSearch {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+}
+
+.logSearch:focus {
+  outline: none;
+  border-color: var(--dsw-alias-accent-1, #4a9eff);
+}
+
+.logClearBtn {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid var(--dsw-alias-state-error-border, rgba(180,0,0,0.3));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary, #c00);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.logClearBtn:hover {
+  background: var(--dsw-alias-state-error-background, rgba(255,0,0,0.06));
+}
+
+/* Log footer: pagination + page size selector. */
+.logPager {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 14px;
+  border-top: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.08));
+  background: var(--dsw-alias-bg-overlay);
+  font-size: 11px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.logPagerInfo {
+  white-space: nowrap;
+}
+
+.logPagerControls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.logPagerBtn {
+  width: 24px;
+  height: 24px;
+  font-size: 13px;
+  line-height: 1;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.logPagerBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.logPagerPages {
+  min-width: 50px;
+  text-align: center;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.logPageSizeSelect {
+  font-size: 11px;
+  padding: 2px 4px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-1, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+/* Clear-log confirmation overlay. */
+.dialogOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.3);
+}
+
+.logClearDialog {
+  width: 320px;
+  padding: 16px;
+  gap: 0;
+}
+
+.dialogBody {
+  font-size: 12px;
+  color: var(--dsw-alias-label-secondary);
+  margin: 6px 0 10px;
+  line-height: 1.5;
+}
+
+.logClearDate {
+  width: 100%;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  margin-bottom: 12px;
+}
+
+.logClearDate:focus {
+  outline: none;
+  border-color: var(--dsw-alias-accent-1, #4a9eff);
 }

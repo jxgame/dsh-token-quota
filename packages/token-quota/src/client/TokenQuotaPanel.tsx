@@ -50,6 +50,8 @@ export interface TokenQuotaPanelInjected {
   setCheckUpdates: (enabled: boolean) => void
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
+  /** Ask the Host to clear log entries before a date, then refresh the log. */
+  clearLogBefore: (before: string) => void
 }
 
 /** Full component props: runtime + store + locale + injected face. */
@@ -142,7 +144,7 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -174,10 +176,17 @@ export function TokenQuotaPanel({
   const upgrade = useStore(s => s.upgrade)
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
+  const lastCheckResult = useStore(s => s.lastCheckResult)
   const reset = useStore(s => s.reset)
   const dialogOpen = useStore(s => s.dialogOpen)
   const logOpen = useStore(s => s.logOpen)
   const log = useStore(s => s.log)
+  const logSearch = useStore(s => s.logSearch)
+  const logPage = useStore(s => s.logPage)
+  const logPageSize = useStore(s => s.logPageSize)
+  const logClearOpen = useStore(s => s.logClearOpen)
+  const logClearBefore = useStore(s => s.logClearBefore)
+  const logClearing = useStore(s => s.logClearing)
   const fullNotice = useStore(s => s.fullNotice)
   const loading = useStore(s => s.loading)
   const error = useStore(s => s.error)
@@ -202,6 +211,24 @@ export function TokenQuotaPanel({
   )
 
   const isMonitoredKey = (key: string): boolean => monitored === null || monitored.includes(key)
+
+  // Log dialog: filter by search, then paginate.
+  const filteredLogEntries = useMemo(() => {
+    if (log === null) return []
+    const q = logSearch.trim().toLowerCase()
+    if (q === '') return log.entries
+    return log.entries.filter(e =>
+      e.key.toLowerCase().includes(q)
+      || e.provider.toLowerCase().includes(q)
+      || e.model.toLowerCase().includes(q),
+    )
+  }, [log, logSearch])
+  const logTotalPages = Math.max(1, Math.ceil(filteredLogEntries.length / logPageSize))
+  const logCurrentPage = Math.min(logPage, logTotalPages - 1)
+  const logPageEntries = useMemo(() => {
+    const start = logCurrentPage * logPageSize
+    return filteredLogEntries.slice(start, start + logPageSize)
+  }, [filteredLogEntries, logCurrentPage, logPageSize])
 
   /** Copy text to the clipboard (clipboard API with execCommand fallback). */
   const copyToClipboard = async (text: string): Promise<void> => {
@@ -525,22 +552,28 @@ export function TokenQuotaPanel({
               </div>
             </div>
             <div className={css.dialogSection}>
-              <label className={css.radioRow}>
-                <input
-                  type="checkbox"
-                  checked={checkUpdates}
-                  onChange={(event) => { setCheckUpdates(event.target.checked) }}
-                />
-                <span>{t('checkUpdatesLabel')}</span>
-              </label>
               <div className={css.checkUpdatesRow}>
+                <label className={css.checkUpdatesLabel}>
+                  <input
+                    type="checkbox"
+                    checked={checkUpdates}
+                    onChange={(event) => { setCheckUpdates(event.target.checked) }}
+                  />
+                  <span>{t('checkUpdatesLabel')}</span>
+                </label>
                 <button
                   type="button"
                   className={css.checkBtn}
                   disabled={checkingUpdates}
                   onClick={checkUpdatesNow}
                 >
-                  {checkingUpdates ? t('checkingUpdates') : t('checkUpdatesNow')}
+                  {checkingUpdates
+                    ? t('checkingUpdates')
+                    : lastCheckResult === 'up-to-date'
+                      ? t('checkUpToDate')
+                      : lastCheckResult === 'error'
+                        ? t('checkFailed')
+                        : t('checkUpdatesNow')}
                 </button>
               </div>
             </div>
@@ -557,6 +590,22 @@ export function TokenQuotaPanel({
             onPointerDown={(event) => { beginDrag(event, logRef.current, setLogPos) }}
           >
             <div className={css.dialogTitle}>{t('logsTitle')}</div>
+            <div className={css.logToolbar} onPointerDown={(event) => { event.stopPropagation() }}>
+              <input
+                type="search"
+                className={css.logSearch}
+                placeholder={t('logSearchPlaceholder')}
+                value={logSearch}
+                onChange={(event) => { actions.setLogSearch(event.target.value) }}
+              />
+              <button
+                type="button"
+                className={css.logClearBtn}
+                onClick={() => { actions.setLogClearOpen(true) }}
+              >
+                {t('logClear')}
+              </button>
+            </div>
             <button
               type="button"
               className={css.dialogClose}
@@ -566,8 +615,8 @@ export function TokenQuotaPanel({
               ×
             </button>
           </div>
-          {log !== null && log.entries.length === 0 && (
-            <div className={css.notice}>{t('logEmpty')}</div>
+          {log !== null && filteredLogEntries.length === 0 && (
+            <div className={css.notice}>{logSearch.trim() !== '' ? t('logNoMatch') : t('logEmpty')}</div>
           )}
           <div className={css.logScroll}>
             <table className={css.logTable}>
@@ -579,7 +628,7 @@ export function TokenQuotaPanel({
                 </tr>
               </thead>
               <tbody>
-                {log?.entries.map(entry => (
+                {logPageEntries.map(entry => (
                   <tr key={`${entry.day}/${entry.key}`}>
                     <td className={css.logDayCol}>{entry.day}</td>
                     <td className={css.logModelCol} title={entry.key}>{entry.key}</td>
@@ -588,6 +637,69 @@ export function TokenQuotaPanel({
                 ))}
               </tbody>
             </table>
+          </div>
+          <div className={css.logPager}>
+            <span className={css.logPagerInfo}>
+              {t('logPagerInfo')
+                .replace('{from}', String(logCurrentPage * logPageSize + 1))
+                .replace('{to}', String(Math.min((logCurrentPage + 1) * logPageSize, filteredLogEntries.length)))
+                .replace('{total}', String(filteredLogEntries.length))}
+            </span>
+            <div className={css.logPagerControls}>
+              <button
+                type="button"
+                className={css.logPagerBtn}
+                disabled={logCurrentPage <= 0}
+                onClick={() => { actions.setLogPage(logCurrentPage - 1) }}
+              >‹</button>
+              <span className={css.logPagerPages}>{logCurrentPage + 1} / {logTotalPages}</span>
+              <button
+                type="button"
+                className={css.logPagerBtn}
+                disabled={logCurrentPage >= logTotalPages - 1}
+                onClick={() => { actions.setLogPage(logCurrentPage + 1) }}
+              >›</button>
+              <select
+                className={css.logPageSizeSelect}
+                value={logPageSize}
+                onChange={(event) => { actions.setLogPageSize(Number(event.target.value)) }}
+              >
+                {[10, 15, 20, 50, 100].map(size => (
+                  <option key={size} value={size}>{size}{t('logPerPage')}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+      {logClearOpen && (
+        <div className={css.dialogOverlay}>
+          <div className={`${css.dialog} ${css.logClearDialog}`}>
+            <div className={css.dialogTitle}>{t('logClearTitle')}</div>
+            <div className={css.dialogBody}>{t('logClearHint')}</div>
+            <input
+              type="date"
+              className={css.logClearDate}
+              value={logClearBefore}
+              onChange={(event) => { actions.setLogClearBefore(event.target.value) }}
+            />
+            <div className={css.dialogActions}>
+              <button
+                type="button"
+                className={css.checkBtn}
+                disabled={logClearBefore === '' || logClearing}
+                onClick={() => { clearLogBefore(logClearBefore) }}
+              >
+                {logClearing ? t('logClearing') : t('logClearConfirm')}
+              </button>
+              <button
+                type="button"
+                className={css.checkBtn}
+                onClick={() => { actions.setLogClearOpen(false) }}
+              >
+                {t('logClearCancel')}
+              </button>
+            </div>
           </div>
         </div>
       )}

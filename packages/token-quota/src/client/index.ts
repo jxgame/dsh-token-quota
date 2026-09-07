@@ -32,6 +32,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: snapshot/settings shapes live in the plugin's own types module.
 import type {
   TokenQuotaFullAction,
+  TokenQuotaLog,
   TokenQuotaReset,
   TokenQuotaSettings,
   TokenQuotaSnapshot,
@@ -329,24 +330,33 @@ export function apply(ctx: ClientContext): void {
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   const checkUpdatesNow = (): void => {
     bound?.setCheckingUpdates(true)
+    bound?.setLastCheckResult('idle')
     void fetch('/token-quota/check-updates', { method: 'POST' }).then(
       (response) => {
         if (!response.ok) {
           bound?.setError(`check-updates route: ${String(response.status)}`)
+          bound?.setLastCheckResult('error')
           return undefined
         }
         return response.json() as Promise<TokenQuotaSnapshot>
       },
       () => {
         bound?.setError('update check failed')
+        bound?.setLastCheckResult('error')
       },
     ).then((snapshot) => {
       if (snapshot !== undefined) {
         bound?.setSnapshot(snapshot)
         bound?.setUpgrade(snapshot.upgrade ?? null)
         actOnFull(snapshot)
+        if (snapshot.upgrade === null) {
+          bound?.setLastCheckResult('up-to-date')
+        }
       }
       bound?.setCheckingUpdates(false)
+      // Clear the transient result hint after a short delay so the button
+      // returns to its idle label.
+      setTimeout(() => { bound?.setLastCheckResult('idle') }, 2500)
     })
   }
 
@@ -377,11 +387,36 @@ export function apply(ctx: ClientContext): void {
     )
   }
 
+  /** Ask the Host to clear log entries before a given date, then refresh. */
+  const clearLogBefore = (before: string): void => {
+    bound?.setLogClearing(true)
+    void fetch('/token-quota/clear-log', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ before }),
+    }).then(
+      (response) => {
+        if (!response.ok) {
+          bound?.setError(`clear-log route: ${String(response.status)}`)
+          return undefined
+        }
+        return response.json() as Promise<TokenQuotaLog>
+      },
+      () => {
+        bound?.setError('clear log failed')
+      },
+    ).then((log) => {
+      if (log !== undefined) bound?.setLog(log)
+      bound?.setLogClearing(false)
+      bound?.setLogClearOpen(false)
+    })
+  }
+
   const injected = (actions: BoundActions<typeof store>): TokenQuotaPanelInjected => {
     bound = actions
     return {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
-      setCheckUpdates, checkUpdatesNow,
+      setCheckUpdates, checkUpdatesNow, clearLogBefore,
     }
   }
 

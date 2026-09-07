@@ -288,6 +288,8 @@ export class TokenQuotaService extends Service {
   private disposeRouteLog: (() => void) | undefined
   /** Disposer for the optional manual-check route (`POST /token-quota/check-updates`). */
   private disposeRouteCheck: (() => void) | undefined
+  /** Disposer for the optional clear-log route (`POST /token-quota/clear-log`). */
+  private disposeRouteClear: (() => void) | undefined
   /** Disposer for the webServer-arrival watcher when the service mounts later. */
   private disposeRouteWatcher: (() => void) | undefined
 
@@ -434,6 +436,35 @@ export class TokenQuotaService extends Service {
         })
       },
     })
+    this.disposeRouteClear = server.register({
+      kind: 'exact',
+      path: '/token-quota/clear-log',
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405); res.end()
+          return
+        }
+        const chunks: Buffer[] = []
+        req.on('data', (chunk) => { chunks.push(Buffer.from(chunk)) })
+        req.on('end', () => {
+          let before = ''
+          try {
+            const raw = Buffer.concat(chunks).toString('utf8')
+            if (raw.length > 0) {
+              const payload = JSON.parse(raw) as { before?: string }
+              before = typeof payload.before === 'string' ? payload.before : ''
+            }
+          } catch {
+            res.writeHead(400, { 'content-type': 'application/json' })
+            res.end(JSON.stringify({ error: 'bad payload' }))
+            return
+          }
+          const updated = this.clearLogBefore(before)
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          res.end(JSON.stringify(updated))
+        })
+      },
+    })
   }
 
   /** Query the npm registry and rebuild the cached upgrade info (coalesced). */
@@ -527,6 +558,25 @@ export class TokenQuotaService extends Service {
     }
     entries.sort((left, right) => right.day.localeCompare(left.day) || left.key.localeCompare(right.key))
     return { entries }
+  }
+
+  /**
+   * Remove all historical cycles whose day portion strictly precedes `before`
+   * (format `YYYY-MM-DD`). The current cycle is never cleared. Returns the
+   * trimmed log so the client can refresh immediately.
+   */
+  clearLogBefore(before: string): TokenQuotaLog {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(before)) return this.readLog()
+    const kept: Record<string, Record<string, number>> = {}
+    for (const [cycle, usageByKey] of Object.entries(this.history)) {
+      const dayPart = cycle.slice(0, 10)
+      if (dayPart >= before) {
+        kept[cycle] = usageByKey
+      }
+    }
+    this.history = kept
+    this.scheduleWrite()
+    return this.readLog()
   }
 
   /** Read the current snapshot (also used by tests and inspection). */
@@ -796,6 +846,7 @@ export class TokenQuotaService extends Service {
     if (this.disposeRoute !== undefined) this.disposeRoute()
     if (this.disposeRouteLog !== undefined) this.disposeRouteLog()
     if (this.disposeRouteCheck !== undefined) this.disposeRouteCheck()
+    if (this.disposeRouteClear !== undefined) this.disposeRouteClear()
     this.flush()
   }
 

@@ -70,6 +70,8 @@ export interface TokenQuotaPanelState {
   upgradeDismissed: boolean
   /** Whether a manual update check is in flight. */
   checkingUpdates: boolean
+  /** Result of the most recent manual check; 'idle' = nothing to show. */
+  lastCheckResult: 'idle' | 'up-to-date' | 'error'
   /** Whether the settings dialog is open. */
   dialogOpen: boolean
   /** Full-quota notice shown for the `'stop'` strategy; null when none. */
@@ -80,6 +82,18 @@ export interface TokenQuotaPanelState {
   logOpen: boolean
   /** Latest usage history; null before the first fetch. */
   log: TokenQuotaLog | null
+  /** Filter string for the log table (matches provider/model key). */
+  logSearch: string
+  /** Current page index (0-based) in the filtered log table. */
+  logPage: number
+  /** Rows per page in the log table. */
+  logPageSize: number
+  /** Whether the clear-log confirmation dialog is open. */
+  logClearOpen: boolean
+  /** The `YYYY-MM-DD` date before which log entries will be cleared. */
+  logClearBefore: string
+  /** Whether a clear-log request is in flight. */
+  logClearing: boolean
 }
 
 /** Declared write surface. */
@@ -93,11 +107,18 @@ export type TokenQuotaPanelActions = {
   setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
+  setLastCheckResult: (d: TokenQuotaPanelState, result: 'idle' | 'up-to-date' | 'error') => void
   setDialogOpen: (d: TokenQuotaPanelState, open: boolean) => void
   setFullNotice: (d: TokenQuotaPanelState, notice: string | null) => void
   setReset: (d: TokenQuotaPanelState, reset: TokenQuotaReset | null) => void
   setLogOpen: (d: TokenQuotaPanelState, open: boolean) => void
   setLog: (d: TokenQuotaPanelState, log: TokenQuotaLog | null) => void
+  setLogSearch: (d: TokenQuotaPanelState, search: string) => void
+  setLogPage: (d: TokenQuotaPanelState, page: number) => void
+  setLogPageSize: (d: TokenQuotaPanelState, size: number) => void
+  setLogClearOpen: (d: TokenQuotaPanelState, open: boolean) => void
+  setLogClearBefore: (d: TokenQuotaPanelState, before: string) => void
+  setLogClearing: (d: TokenQuotaPanelState, clearing: boolean) => void
 }
 
 /**
@@ -118,11 +139,18 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       upgrade: null,
       upgradeDismissed: false,
       checkingUpdates: false,
+      lastCheckResult: 'idle',
       dialogOpen: false,
       fullNotice: null,
       reset: null,
       logOpen: false,
       log: null,
+      logSearch: '',
+      logPage: 0,
+      logPageSize: 15,
+      logClearOpen: false,
+      logClearBefore: '',
+      logClearing: false,
     }),
     actions: {
       setSnapshot: (d, snapshot) => { d.snapshot = snapshot },
@@ -141,11 +169,18 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       },
       setUpgradeDismissed: (d, dismissed) => { d.upgradeDismissed = dismissed },
       setCheckingUpdates: (d, checking) => { d.checkingUpdates = checking },
+      setLastCheckResult: (d, result) => { d.lastCheckResult = result },
       setDialogOpen: (d, open) => { d.dialogOpen = open },
       setFullNotice: (d, notice) => { d.fullNotice = notice },
       setReset: (d, reset) => { d.reset = reset },
       setLogOpen: (d, open) => { d.logOpen = open },
       setLog: (d, log) => { d.log = log },
+      setLogSearch: (d, search) => { d.logSearch = search; d.logPage = 0 },
+      setLogPage: (d, page) => { d.logPage = page },
+      setLogPageSize: (d, size) => { d.logPageSize = size; d.logPage = 0 },
+      setLogClearOpen: (d, open) => { d.logClearOpen = open },
+      setLogClearBefore: (d, before) => { d.logClearBefore = before },
+      setLogClearing: (d, clearing) => { d.logClearing = clearing },
     },
   })
 }
