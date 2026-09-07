@@ -272,6 +272,7 @@ export function apply(ctx: ClientContext): void {
       if (snapshot === undefined) return
       bound?.setSnapshot(snapshot)
       bound?.setUpgrade(snapshot.upgrade ?? null)
+      bound?.setUpgradeError(snapshot.upgradeError ?? null)
       actOnFull(snapshot)
     })
     if (pullCount % 2 === 0) refreshCurrent()
@@ -348,15 +349,18 @@ export function apply(ctx: ClientContext): void {
       if (snapshot !== undefined) {
         bound?.setSnapshot(snapshot)
         bound?.setUpgrade(snapshot.upgrade ?? null)
+        bound?.setUpgradeError(snapshot.upgradeError ?? null)
         actOnFull(snapshot)
         if (snapshot.upgrade === null) {
-          bound?.setLastCheckResult('up-to-date')
+          // No newer version known: distinguish "checked OK, up to date"
+          // from "check failed" via the host-provided error message.
+          bound?.setLastCheckResult(snapshot.upgradeError !== null ? 'error' : 'up-to-date')
         }
       }
       bound?.setCheckingUpdates(false)
       // Clear the transient result hint after a short delay so the button
-      // returns to its idle label.
-      setTimeout(() => { bound?.setLastCheckResult('idle') }, 2500)
+      // returns to its idle label. The error message stays until the next check.
+      setTimeout(() => { bound?.setLastCheckResult('idle') }, 4000)
     })
   }
 

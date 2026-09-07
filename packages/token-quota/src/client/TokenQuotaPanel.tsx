@@ -177,6 +177,7 @@ export function TokenQuotaPanel({
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
   const lastCheckResult = useStore(s => s.lastCheckResult)
+  const upgradeError = useStore(s => s.upgradeError)
   const reset = useStore(s => s.reset)
   const dialogOpen = useStore(s => s.dialogOpen)
   const logOpen = useStore(s => s.logOpen)
@@ -576,6 +577,9 @@ export function TokenQuotaPanel({
                         : t('checkUpdatesNow')}
                 </button>
               </div>
+              {lastCheckResult === 'error' && upgradeError !== null && (
+                <div className={css.checkErrorHint} role="alert">{upgradeError}</div>
+              )}
             </div>
           </div>
       )}

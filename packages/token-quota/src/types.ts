@@ -136,6 +136,8 @@ export interface TokenQuotaSnapshot {
   entries: TokenQuotaEntry[]
   /** Upgrade availability; `null` when no newer version is known. */
   upgrade: TokenQuotaUpgrade | null
+  /** Error from the most recent update check; `null` = no error (or never checked). */
+  upgradeError: string | null
 }
 
 /** One historical daily usage record, shown in the log dialog. */

@@ -72,6 +72,8 @@ export interface TokenQuotaPanelState {
   checkingUpdates: boolean
   /** Result of the most recent manual check; 'idle' = nothing to show. */
   lastCheckResult: 'idle' | 'up-to-date' | 'error'
+  /** Error message from the most recent update check (shown when lastCheckResult='error'). */
+  upgradeError: string | null
   /** Whether the settings dialog is open. */
   dialogOpen: boolean
   /** Full-quota notice shown for the `'stop'` strategy; null when none. */
@@ -108,6 +110,7 @@ export type TokenQuotaPanelActions = {
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
   setLastCheckResult: (d: TokenQuotaPanelState, result: 'idle' | 'up-to-date' | 'error') => void
+  setUpgradeError: (d: TokenQuotaPanelState, error: string | null) => void
   setDialogOpen: (d: TokenQuotaPanelState, open: boolean) => void
   setFullNotice: (d: TokenQuotaPanelState, notice: string | null) => void
   setReset: (d: TokenQuotaPanelState, reset: TokenQuotaReset | null) => void
@@ -140,6 +143,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       upgradeDismissed: false,
       checkingUpdates: false,
       lastCheckResult: 'idle',
+      upgradeError: null,
       dialogOpen: false,
       fullNotice: null,
       reset: null,
@@ -170,6 +174,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setUpgradeDismissed: (d, dismissed) => { d.upgradeDismissed = dismissed },
       setCheckingUpdates: (d, checking) => { d.checkingUpdates = checking },
       setLastCheckResult: (d, result) => { d.lastCheckResult = result },
+      setUpgradeError: (d, error) => { d.upgradeError = error },
       setDialogOpen: (d, open) => { d.dialogOpen = open },
       setFullNotice: (d, notice) => { d.fullNotice = notice },
       setReset: (d, reset) => { d.reset = reset },

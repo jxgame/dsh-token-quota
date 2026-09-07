@@ -270,6 +270,8 @@ export class TokenQuotaService extends Service {
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
   private upgrade: TokenQuotaUpgrade | null = null
+  /** Error message from the most recent update check; null = no error. */
+  private upgradeError: string | null = null
   /** Timer for the periodic update check. */
   private updateTimer: ReturnType<typeof setTimeout> | undefined
   /** In-flight update check, to coalesce the periodic and manual triggers. */
@@ -484,6 +486,7 @@ export class TokenQuotaService extends Service {
     const current = __TOKEN_QUOTA_VERSION__
     if (current === undefined || current === '') {
       this.upgrade = null
+      this.upgradeError = null
       return
     }
     let latest: string | undefined
@@ -494,17 +497,25 @@ export class TokenQuotaService extends Service {
       })
       if (!response.ok) {
         this.upgrade = null
+        this.upgradeError = `registry responded ${response.status} ${response.statusText}`
         return
       }
       const manifest = await response.json() as { version?: string }
       latest = typeof manifest.version === 'string' ? manifest.version : undefined
-    } catch {
-      // Offline / registry failure: keep showing nothing rather than erroring.
+    } catch (err) {
       this.upgrade = null
+      const msg = err instanceof Error ? err.message : String(err)
+      // Common Node fetch error shapes include the URL; surface a short reason.
+      this.upgradeError = msg.includes('fetch failed')
+        ? '无法访问 npm registry（网络超时或被墙）'
+        : msg.includes('aborted')
+          ? '请求超时（10s）'
+          : msg
       return
     }
     if (latest === undefined || !isNewer(latest, current)) {
       this.upgrade = null
+      this.upgradeError = null
       return
     }
     const profile = findProfile()
@@ -518,6 +529,7 @@ export class TokenQuotaService extends Service {
       commands,
       installKind: profile?.installKind ?? 'registry',
     }
+    this.upgradeError = null
   }
 
   /** Start or stop the periodic update check to match the current setting. */
@@ -596,7 +608,7 @@ export class TokenQuotaService extends Service {
       })
     }
     entries.sort((left, right) => left.key.localeCompare(right.key))
-    return { day: this.cycle, entries, upgrade: this.upgrade }
+    return { day: this.cycle, entries, upgrade: this.upgrade, upgradeError: this.upgradeError }
   }
 
   /** Today's used tokens for one model key, or `0`. */
