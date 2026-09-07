@@ -251,14 +251,20 @@ export class TokenQuotaService extends Service {
     })
 
     // For every newly created agent, install an agent-scoped enforcement
-    // listener that runs AFTER the api-proxy's model-selection listener (so
-    // user selections always apply first), and is therefore the last word on
-    // the chosen provider/model. When the resolved model is at its cap and
-    // the configured strategy allows an automatic switch, it rewrites the
-    // call config to a suitable replacement model instead of throwing, so
-    // the turn proceeds uninterrupted.
+    // listener at the OUTERMOST position of the `agent/request` waterfall
+    // (`prepend: true`). The waterfall runs outermost-first, so this listener
+    // awaits the api-proxy model-selection listener (registered during agent
+    // setup, innermost) and therefore sees the user's ACTUAL selected model —
+    // not the agent's creation-time default. A manual switch in the panel or
+    // the composer's model picker then correctly bypasses an exhausted model,
+    // and when the configured strategy allows it, an automatic switch here
+    // returns a rewritten config with no outer listener left to override it.
     ctx.on('agent/created', ({ agent }) => {
-      agent.ctx.on('agent/request', async (payload, next) => this.onRequest(payload, next))
+      agent.ctx.on(
+        'agent/request',
+        async (payload, next) => this.onRequest(payload, next),
+        { prepend: true },
+      )
     })
 
     ctx.effect(() => () => { this.disposeLocal() }, 'token-quota: flush on unload')
