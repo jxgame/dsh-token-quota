@@ -150,6 +150,11 @@ export function TokenQuotaPanel({
   const [collapsed, setCollapsed] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [editingKey, setEditingKey] = useState<string | null>(null)
+  // Hover / focus state for the translucent-while-idle behaviour: the panel
+  // dims when the mouse is away (and especially while typing in the composer)
+  // so the chat content behind it stays readable; hovering restores it.
+  const [hovered, setHovered] = useState(false)
+  const [inputActive, setInputActive] = useState(false)
   // Draggable placements: the panel persists across reloads; the dialogs
   // start centered (null) and remember where they were dragged to.
   const [panelPos, setPanelPos] = useState<Pos | null>(loadPanelPos)
@@ -196,6 +201,21 @@ export function TokenQuotaPanel({
   useEffect(() => {
     if (sessionId !== undefined) load(sessionId)
   }, [sessionId, load])
+
+  // Track whether any text input (composer, search, dialogs) currently has
+  // focus, so the panel can dim while the user types elsewhere.
+  useEffect(() => {
+    const onFocusIn = (event: FocusEvent): void => {
+      const target = event.target as HTMLElement | null
+      const isInput = target !== null && (
+        target.matches('input, textarea, [contenteditable="true"]')
+        || target.closest('input, textarea, [contenteditable="true"]') !== null
+      )
+      setInputActive(isInput)
+    }
+    window.addEventListener('focusin', onFocusIn)
+    return () => { window.removeEventListener('focusin', onFocusIn) }
+  }, [])
 
   const rows = useMemo(
     () => mergeModelRows(groups, snapshot, current),
@@ -303,12 +323,17 @@ export function TokenQuotaPanel({
   }
 
   const visibleRows = rows.filter(row => isMonitoredKey(row.key) || row.current)
+  // The panel dims when the pointer is away; dimming is stronger while the
+  // user is typing in an input elsewhere so the text behind stays readable.
+  const panelDimClass = hovered ? '' : inputActive ? css.panelDimStrong : css.panelDim
 
   return (
     <div
       ref={panelRef}
-      className={css.panel}
+      className={`${css.panel}${panelDimClass !== '' ? ` ${panelDimClass}` : ''}`}
       style={panelPos !== null ? { left: panelPos.x, top: panelPos.y, right: 'auto' } : undefined}
+      onPointerEnter={() => { setHovered(true) }}
+      onPointerLeave={() => { setHovered(false) }}
     >
       <div
         className={css.header}

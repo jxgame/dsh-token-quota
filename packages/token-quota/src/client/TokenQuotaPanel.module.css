@@ -16,6 +16,18 @@
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
   pointer-events: auto;
   z-index: 40;
+  opacity: 1;
+  transition: opacity 0.18s ease;
+}
+
+/* Translucent while idle: light dim when the pointer is away. */
+.panelDim {
+  opacity: 0.55;
+}
+
+/* Stronger dim while typing in an input outside the panel. */
+.panelDimStrong {
+  opacity: 0.3;
 }
 
 .header {
