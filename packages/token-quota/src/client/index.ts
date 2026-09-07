@@ -351,7 +351,11 @@ export function apply(ctx: ClientContext): void {
         bound?.setUpgrade(snapshot.upgrade ?? null)
         bound?.setUpgradeError(snapshot.upgradeError ?? null)
         actOnFull(snapshot)
-        if (snapshot.upgrade === null) {
+        if (snapshot.upgrade !== null) {
+          // A new version was found: close the settings dialog so the
+          // flashing upgrade banner in the panel is immediately visible.
+          bound?.setDialogOpen(false)
+        } else {
           // No newer version known: distinguish "checked OK, up to date"
           // from "check failed" via the host-provided error message.
           bound?.setLastCheckResult(snapshot.upgradeError !== null ? 'error' : 'up-to-date')

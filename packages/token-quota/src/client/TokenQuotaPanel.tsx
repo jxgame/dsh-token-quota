@@ -155,6 +155,15 @@ export function TokenQuotaPanel({
   // so the chat content behind it stays readable; hovering restores it.
   const [hovered, setHovered] = useState(false)
   const [inputActive, setInputActive] = useState(false)
+  // Copy-button feedback: which command was just copied (label flips to
+  // 「已复制」for a moment so the click is perceivable).
+  const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
+  const copyTimerRef = useRef<number | null>(null)
+  // Flash state for the upgrade banner: armed when a NEW latest version shows
+  // up (either from a manual check or a periodic poll).
+  const [upgradeFlash, setUpgradeFlash] = useState(false)
+  const flashTimerRef = useRef<number | null>(null)
+  const prevUpgradeRef = useRef<string | null>(null)
   // Draggable placements: the panel persists across reloads; the dialogs
   // start centered (null) and remember where they were dragged to.
   const [panelPos, setPanelPos] = useState<Pos | null>(loadPanelPos)
@@ -217,6 +226,33 @@ export function TokenQuotaPanel({
     return () => { window.removeEventListener('focusin', onFocusIn) }
   }, [])
 
+  // When a NEW latest version appears (manual check or periodic poll):
+  // expand the panel (it may be collapsed), force it opaque, and flash the
+  // upgrade banner a few times so the discovery is unmissable.
+  useEffect(() => {
+    const latest = upgrade?.latestVersion ?? null
+    if (latest !== null && prevUpgradeRef.current !== latest) {
+      setCollapsed(false)
+      setUpgradeFlash(true)
+      if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+      flashTimerRef.current = window.setTimeout(() => {
+        setUpgradeFlash(false)
+        flashTimerRef.current = null
+      }, 2500)
+    }
+    prevUpgradeRef.current = latest
+    return () => {
+      // Keep the timer across re-renders; cleared only on unmount.
+    }
+  }, [upgrade])
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current !== null) clearTimeout(flashTimerRef.current)
+      if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
   const rows = useMemo(
     () => mergeModelRows(groups, snapshot, current),
     [groups, snapshot, current],
@@ -265,6 +301,17 @@ export function TokenQuotaPanel({
       try { document.execCommand('copy') } catch { /* ignore */ }
       document.body.removeChild(el)
     }
+  }
+
+  /** Copy an upgrade command and show per-button success feedback. */
+  const copyUpgradeCommand = (cmd: string): void => {
+    void copyToClipboard(cmd)
+    setCopiedCmd(cmd)
+    if (copyTimerRef.current !== null) clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = window.setTimeout(() => {
+      setCopiedCmd(null)
+      copyTimerRef.current = null
+    }, 1600)
   }
 
   // Fetch the usage log whenever the log dialog opens. Kept ABOVE the
@@ -325,7 +372,10 @@ export function TokenQuotaPanel({
   const visibleRows = rows.filter(row => isMonitoredKey(row.key) || row.current)
   // The panel dims when the pointer is away; dimming is stronger while the
   // user is typing in an input elsewhere so the text behind stays readable.
-  const panelDimClass = hovered ? '' : inputActive ? css.panelDimStrong : css.panelDim
+  // While the upgrade banner flashes, the panel is forced opaque.
+  const panelDimClass = hovered || upgradeFlash
+    ? ''
+    : inputActive ? css.panelDimStrong : css.panelDim
 
   return (
     <div
@@ -375,7 +425,7 @@ export function TokenQuotaPanel({
           <div className={css.fullNotice} role="alert">{fullNotice}</div>
         )}
         {upgrade !== null && !upgradeDismissed && (
-          <div className={css.upgradeBanner} role="alert">
+          <div className={`${css.upgradeBanner}${upgradeFlash ? ` ${css.upgradeBannerFlash}` : ''}`} role="alert">
             <div className={css.upgradeBannerText}>
               {t('upgradeAvailable').replace('{version}', upgrade.latestVersion)}
             </div>
@@ -383,8 +433,12 @@ export function TokenQuotaPanel({
               {upgrade.commands.map(cmd => (
                 <div key={cmd} className={css.upgradeCommandRow}>
                   <code className={css.upgradeCommand}>{cmd}</code>
-                  <button type="button" className={css.copyBtn} onClick={() => { void copyToClipboard(cmd) }}>
-                    {t('copy')}
+                  <button
+                    type="button"
+                    className={`${css.copyBtn}${copiedCmd === cmd ? ` ${css.copyBtnDone}` : ''}`}
+                    onClick={() => { copyUpgradeCommand(cmd) }}
+                  >
+                    {copiedCmd === cmd ? t('copied') : t('copy')}
                   </button>
                 </div>
               ))}

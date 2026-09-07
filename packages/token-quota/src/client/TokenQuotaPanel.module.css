@@ -341,6 +341,23 @@
   border-radius: 8px;
 }
 
+/* Flash a few times when a new version is first detected. */
+@keyframes upgradeBannerFlash {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(240, 160, 32, 0);
+    border-color: var(--dsw-alias-divider-1, rgba(0,0,0,0.1));
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(240, 160, 32, 0.45);
+    border-color: var(--dsw-alias-status-warning-foreground, #b56900);
+  }
+}
+
+.upgradeBannerFlash {
+  animation: upgradeBannerFlash 0.6s ease-in-out 4;
+  border-color: var(--dsw-alias-status-warning-foreground, #b56900);
+}
+
 .upgradeBannerText {
   font-weight: 600;
   margin-bottom: 6px;
@@ -379,10 +396,23 @@
   background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
+  transition: transform 0.08s ease, background 0.12s ease, color 0.12s ease;
 }
 
 .copyBtn:hover {
   background: var(--dsw-alias-bg-layer-3, rgba(0,0,0,0.08));
+}
+
+.copyBtn:active {
+  transform: scale(0.92);
+}
+
+/* Success state right after copying a command. */
+.copyBtnDone {
+  background: var(--dsw-alias-status-success-background, rgba(20, 150, 60, 0.12));
+  border-color: var(--dsw-alias-status-success-foreground, #0a7d32);
+  color: var(--dsw-alias-status-success-foreground, #0a7d32);
+  font-weight: 600;
 }
 
 .upgradeHint {
