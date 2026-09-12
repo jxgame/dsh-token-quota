@@ -40,11 +40,15 @@ Install the dependency in your web profile (`~/.dsh/profiles/web`):
 
 ```bash
 cd ~/.dsh/profiles/web
-npm install @jxgame2020/dsh-token-quota
+npm install @jxgame2020/dsh-token-quota --omit=peer
 ```
 
-> 用 pnpm 管理 profile 的话：`pnpm add @jxgame2020/dsh-token-quota`。
-> With pnpm: `pnpm add @jxgame2020/dsh-token-quota`.
+> **为什么 `--omit=peer` / Why `--omit=peer`**：插件运行时所需的 `@deepseek-ai/*` 由 DSH 宿主提供，不需要安装在 profile 里；npm 上这些包的最新 tag 是互不兼容的旧 rc 版本，自动安装 peer 会触发 ERESOLVE 冲突。0.1.20+ 已将这些 peer 全部标记为 optional，直接 `npm install @jxgame2020/dsh-token-quota` 通常也能成功；若仍报 `ERESOLVE`，加上 `--omit=peer` 即可。
+>
+> The plugin's `@deepseek-ai/*` dependencies are provided by the DSH host at runtime — they must NOT be installed into the profile (npm's latest tags for them are mutually-incompatible old rc versions, so auto-installing peers raises ERESOLVE). Since 0.1.20 all those peers are marked optional, so plain `npm install` usually works; if you still hit `ERESOLVE`, append `--omit=peer`.
+
+> 用 pnpm 管理 profile 的话：`pnpm add @jxgame2020/dsh-token-quota`（pnpm 默认不装 peer，无需额外参数）。
+> With pnpm: `pnpm add @jxgame2020/dsh-token-quota` (pnpm does not auto-install peers — no extra flag needed).
 
 在 `cordis.patch.yml` 中挂载插件：
 
