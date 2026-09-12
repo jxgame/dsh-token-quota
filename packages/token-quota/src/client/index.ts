@@ -79,8 +79,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** Required services: slot registry, sessions, locale, settings scope. */
-export const inject = ['slots', 'sessions', 'locale', 'settingsScope']
+/** Required services: slot registry, sessions, locale, settings scope, and the Host remote faces. */
+export const inject = ['slots', 'sessions', 'locale', 'settingsScope', 'remote', 'remote.session']
 
 /**
  * Client plugin body: poll the Host snapshot route, run the full-quota
