@@ -28,6 +28,10 @@ Zero changes to the DSH core repo: no core file is modified, no official bundle 
 
 ## 安装 / Installation
 
+> **版本要求 / Version requirement**：`0.1.19+` 需要 DSH **≥ 0.1.5**（新 API：`SettingsProvider.installSection`、`ctx.remote.session`）。DSH 0.1.0-rc.7 及更早版本请使用 `@jxgame2020/dsh-token-quota@0.1.18`。
+>
+> **Version requirement**: `0.1.19+` requires DSH **≥ 0.1.5** (new APIs: `SettingsProvider.installSection`, `ctx.remote.session`). For DSH 0.1.0-rc.7 and earlier, install `@jxgame2020/dsh-token-quota@0.1.18`.
+
 ### 方式一：npm 安装（推荐）/ Option A: npm install (recommended)
 
 在你的 web profile（`~/.dsh/profiles/web`）下安装依赖：
