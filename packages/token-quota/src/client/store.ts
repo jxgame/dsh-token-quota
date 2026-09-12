@@ -8,8 +8,8 @@
  * @module @deepseek-ai/dsh-client-ui-token-quota/client/store
  */
 
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ModelProviderGroup, ModelSelection } from '@deepseek-ai/dsh-api-remotes/client'
+import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import type { ModelProviderGroup, ModelSelection } from '@deepseek-ai/dsh-api-session-controller/types'
 // Type-only: snapshot shape lives in the host quota package.
 import type {
   TokenQuotaFullAction,

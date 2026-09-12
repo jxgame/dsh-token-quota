@@ -1,7 +1,7 @@
 {
   "name": "@jxgame2020/dsh-token-quota",
   "description": "Daily per-model token quota accounting, enforcement, and a floating quota panel for the DeepSeek Harness — a fully self-contained plugin (no core-Harness wiring, no generated RPC contract)",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "publishConfig": {
     "access": "public"
   },
@@ -56,28 +56,30 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-agent": "*",
-    "@deepseek-ai/dsh-api-remotes": "*",
+    "@deepseek-ai/dsh-api-gateway": "*",
+    "@deepseek-ai/dsh-api-session-controller": "*",
+    "@deepseek-ai/dsh-attachment": "*",
+    "@deepseek-ai/dsh-brand": "*",
     "@deepseek-ai/dsh-client-connection": "*",
     "@deepseek-ai/dsh-client-locale": "*",
-    "@deepseek-ai/dsh-client-runtime": "*",
+    "@deepseek-ai/dsh-client-store": "*",
     "@deepseek-ai/dsh-client-ui-layout": "*",
+    "@deepseek-ai/dsh-client-ui-renderer": "*",
+    "@deepseek-ai/dsh-client-ui-session": "*",
     "@deepseek-ai/dsh-client-ui-settings": "*",
     "@deepseek-ai/dsh-client-ui-slots": "*",
     "@deepseek-ai/dsh-invariants": "*",
+    "@deepseek-ai/dsh-jobs": "*",
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
-    "@deepseek-ai/dsh-settings": "*",
-    "react": "^18.2.0",
-    "@deepseek-ai/dsh-host-apiproxy": "*",
-    "@deepseek-ai/dsh-attachment": "*",
-    "@deepseek-ai/dsh-brand": "*",
-    "@deepseek-ai/dsh-jobs": "*",
     "@deepseek-ai/dsh-session-projection": "*",
+    "@deepseek-ai/dsh-settings": "*",
     "@deepseek-ai/dsh-tools": "*",
     "@deepseek-ai/dsh-user-approval": "*",
     "@deepseek-ai/dsh-user-questions": "*",
     "@deepseek-ai/dsh-workspace": "*",
-    "@deepseek-ai/schemastery": "*"
+    "@deepseek-ai/schemastery": "*",
+    "react": "^18.2.0"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/cordis": {

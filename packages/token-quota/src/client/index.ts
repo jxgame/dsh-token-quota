@@ -12,12 +12,14 @@
  * full-quota strategy runs: `stop` shows a notice, the other three
  * auto-switch to a suitable model.
  */
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {
-  ConnectionHandle, ModelProviderGroup, ModelSelection, SessionId,
-} from '@deepseek-ai/dsh-api-remotes/client'
+  ModelProviderGroup, ModelSelection, ModelSelectionProjection,
+} from '@deepseek-ai/dsh-api-session-controller/types'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 // Type-only: pulls the ctx.remote merge (forwarded event face).
-import type {} from '@deepseek-ai/dsh-api-remotes/client'
+import type {} from '@deepseek-ai/dsh-api-gateway/client'
 // Type-only: pulls the ctx.settingsScope merge.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the ctx.locale merge.
@@ -26,8 +28,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // so both the register name and PropsRuntime narrow against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the SlotRegistry service merge (ctx.slots).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: snapshot/settings shapes live in the plugin's own types module.
 import type {
@@ -59,18 +62,15 @@ const POLL_INTERVAL_MS = 3000
 // Local response shapes for the session RPCs. The Host's RPC contract types
 // resolve through workspace-linked declaration files that may not fully
 // resolve in a standalone build; these narrow the destructured callbacks to
-// exactly the fields the panel uses.
-interface ModelsResult {
-  ok: boolean
-  value: { groups: readonly ModelProviderGroup[]; current: ModelSelection | null }
-  error?: { code: string; message: string }
-}
+// exactly the fields the panel uses. Discriminated like the wire
+// `RemoteResult`: `ok: true` carries `value`, `ok: false` carries `error`.
+type ModelsResult =
+  | { ok: true; value: { groups: readonly ModelProviderGroup[] } }
+  | { ok: false; error: { code: string; message: string } }
 
-interface SelectModelResult {
-  ok: boolean
-  value: { selected: ModelSelection | null }
-  error?: { code: string; message: string }
-}
+type SelectModelResult =
+  | { ok: true; value: { selected: ModelSelection | null } }
+  | { ok: false; error: { code: string; message: string } }
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -79,8 +79,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** Required services: slot registry, connection RPC, locale, settings scope. */
-export const inject = ['slots', 'connection', 'locale', 'settingsScope']
+/** Required services: slot registry, sessions, locale, settings scope. */
+export const inject = ['slots', 'sessions', 'locale', 'settingsScope']
 
 /**
  * Client plugin body: poll the Host snapshot route, run the full-quota
@@ -93,7 +93,10 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS)
   const scope = ctx.settingsScope.bind<TokenQuotaSettings>({ namespace: TOKEN_QUOTA_NAMESPACE })
-  const connection = ctx.get('connection') as ConnectionHandle
+  // The Host `dsh-session` package's `ctx.sessions: SessionStore` merge can
+  // shadow the client ISessions face in a combined type-check; the runtime
+  // 'sessions' service is the ISessions implementation regardless.
+  const sessions = ctx.get('sessions') as unknown as ISessions
 
   // Store handle shared with the registration; the framework instantiates the
   // live store per entry and hands its bound actions to the inject factory,
@@ -184,12 +187,12 @@ export function apply(ctx: ClientContext): void {
       bound?.setFullNotice(t('fullSwitchFailed'))
       return
     }
-    void connection.api.sessions.selectModel({
+    void ctx.remote.session.selectModel({
       sessionId: lastSessionId,
       provider: target.provider,
       model: target.model,
     }).then(
-      ({ result }: { result: SelectModelResult }) => {
+      (result: SelectModelResult) => {
         if (result.ok) {
           lastCurrent = result.value.selected
           flashFullNotice(t('fullSwitchTo').replace('{model}', target.model))
@@ -210,16 +213,25 @@ export function apply(ctx: ClientContext): void {
   // switch on full quota) moves the 「当前」 badge without waiting the full
   // directory-refresh cadence.
   let pullCount = 0
+  /** Resolve the session's current model from its durable modelSelection projection. */
+  const currentOf = (sessionId: SessionId): ModelSelection | null => {
+    const binding = sessions.binding(sessionId)
+    if (binding === undefined) return null
+    const face = binding.session.projections.faceOf('modelSelection')
+    const state = face.getSnapshot() as ModelSelectionProjection | null | undefined
+    return state?.lastUsed ?? null
+  }
   const refreshCurrent = (): void => {
     if (lastSessionId === undefined) return
-    void connection.api.sessions.models({ sessionId: lastSessionId }).then(
-      ({ result }: { result: ModelsResult }) => {
+    void ctx.remote.session.modelCatalog().then(
+      (result: ModelsResult) => {
         if (result.ok) {
-          const currentChanged = lastCurrent?.provider !== result.value.current?.provider
-            || lastCurrent?.model !== result.value.current?.model
+          const current = currentOf(lastSessionId as SessionId)
+          const currentChanged = lastCurrent?.provider !== current?.provider
+            || lastCurrent?.model !== current?.model
           lastGroups = result.value.groups
-          lastCurrent = result.value.current
-          bound?.setDirectory(result.value.groups, result.value.current)
+          lastCurrent = current
+          bound?.setDirectory(result.value.groups, current)
           // If the server silently switched to a different model (e.g. the
           // auto-switch on quota exhaustion), re-run the full-quota strategy
           // immediately against the new current model so any further fallback
@@ -288,12 +300,13 @@ export function apply(ctx: ClientContext): void {
     lastSessionId = sessionId
     bound?.setLoading(true)
     bound?.setError(null)
-    void connection.api.sessions.models({ sessionId }).then(
-      ({ result }: { result: ModelsResult }) => {
+    void ctx.remote.session.modelCatalog().then(
+      (result: ModelsResult) => {
         if (result.ok) {
+          const current = currentOf(sessionId)
           lastGroups = result.value.groups
-          lastCurrent = result.value.current
-          bound?.setDirectory(result.value.groups, result.value.current)
+          lastCurrent = current
+          bound?.setDirectory(result.value.groups, current)
           bound?.setLoading(false)
         } else {
           bound?.setError(`${result.error!.code}: ${result.error!.message}`)
@@ -381,8 +394,8 @@ export function apply(ctx: ClientContext): void {
   }
 
   const selectModel = (sessionId: SessionId, provider: string, model: string): void => {
-    void connection.api.sessions.selectModel({ sessionId, provider, model }).then(
-      ({ result }: { result: SelectModelResult }) => {
+    void ctx.remote.session.selectModel({ sessionId, provider, model }).then(
+      (result: SelectModelResult) => {
         if (result.ok) {
           lastCurrent = result.value.selected
           // A manual pick clears any leftover auto-switch / exhausted notice.

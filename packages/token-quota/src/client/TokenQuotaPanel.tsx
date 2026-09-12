@@ -17,7 +17,9 @@ import type {
 // into this program so PropsRuntime<'shell.overlay'> typechecks against the
 // real declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
-import type { SessionId } from '@deepseek-ai/dsh-api-remotes/client'
+// Type-only: pulls the ui-session standard props merge (useSessions).
+import type {} from '@deepseek-ai/dsh-client-ui-session/client'
+import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
@@ -26,7 +28,8 @@ import type {
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
 import { mergeModelRows } from './store.ts'
 import type { TokenQuotaKey } from './locales.ts'
-import type {} from '@deepseek-ai/dsh-client-runtime/client'
+// Type-only: pulls the SlotRegistry service merge (ctx.slots).
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import css from './TokenQuotaPanel.module.css'
 
 /** Inlined at build time (tsdown `define`) from package.json; undefined in the type-check-only host build. */

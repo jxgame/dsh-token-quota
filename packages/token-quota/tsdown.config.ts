@@ -26,8 +26,20 @@ const PLATFORM_MODULES = [
   '@deepseek-ai/dsh-client-schema-form',
 ] as const
 
-/** Externals: the platform seed entries plus the documented runtime exemption. */
-const CLIENT_EXTERNALS: readonly string[] = [...PLATFORM_MODULES, '@deepseek-ai/dsh-client-runtime/client']
+/** Externals: the platform seed entries plus every @deepseek-ai module the client imports (runtime + type-only). */
+const CLIENT_EXTERNALS: readonly string[] = [
+  ...PLATFORM_MODULES,
+  '@deepseek-ai/dsh-client-store',
+  '@deepseek-ai/dsh-client-ui-settings/client',
+  '@deepseek-ai/dsh-client-locale/client',
+  '@deepseek-ai/dsh-client-ui-layout/client',
+  '@deepseek-ai/dsh-client-ui-renderer/client',
+  '@deepseek-ai/dsh-client-ui-session/client',
+  '@deepseek-ai/dsh-api-gateway/client',
+  '@deepseek-ai/dsh-api-session-controller/client',
+  '@deepseek-ai/dsh-api-session-controller/types',
+  '@deepseek-ai/dsh-session/types',
+]
 
 /** Generated descriptor/codec contributions (this plugin's own /remote) inline safely. */
 const GENERATED_REMOTE = /^@deepseek-ai\/dsh-[a-z0-9]+(?:-[a-z0-9]+)*\/remote$/

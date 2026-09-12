@@ -39,10 +39,11 @@ import z from '@deepseek-ai/schemastery'
 // Type-only side-effect: pulls agent/request and agent/pre-step Events augmentations
 // the service listens to without importing any runtime value.
 import '@deepseek-ai/dsh-agent'
+// Type-only: pulls the ctx.settings Context merge (SettingsProvider).
+import type {} from '@deepseek-ai/dsh-settings'
 import { LlmError } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, LlmModelInfo, LlmProviderInfo, TokenUsage } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { installSettingsSection, settingsNamespace } from '@deepseek-ai/dsh-settings'
 import {
   TOKEN_QUOTA_EXCEEDED_CODE,
   TOKEN_QUOTA_NAMESPACE,
@@ -355,8 +356,12 @@ export class TokenQuotaService extends Service {
     this.load()
 
     // Limits live in the user settings document; the Web panel writes them and
-    // the section watcher pushes every change back here.
-    installSettingsSection(ctx, settingsNamespace(TOKEN_QUOTA_NAMESPACE), TOKEN_QUOTA_SETTINGS_SCHEMA, { limits: {} }, {
+    // the section watcher pushes every change back here. DSH 0.1.5 replaced
+    // the standalone `installSettingsSection` helper with
+    // `SettingsProvider.installSection`, reached through `ctx.inject` so the
+    // settings service is guaranteed to be up before registration.
+    ctx.inject(['settings'], (settingsCtx) => {
+      settingsCtx.settings.installSection(ctx, TOKEN_QUOTA_NAMESPACE, TOKEN_QUOTA_SETTINGS_SCHEMA, { limits: {} }, {
       setSource: (current) => {
         // Normalize the resolved (schema-shaped) document into the plugin's
         // required shape: empty monitored = monitor everything, absent onFull
@@ -408,6 +413,7 @@ export class TokenQuotaService extends Service {
           this.rollCycleIfNeeded()
         }
       },
+      })
     })
 
     // Snapshot route: optional — only mounted when a webServer service exists
