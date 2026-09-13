@@ -158,7 +158,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       dimWhenIdle: false,
       musicEnabled: false,
       musicVolume: 0.5,
-      musicStyle: 'major',
+      musicStyle: 'pentatonic',
       musicOnlyCurrentSession: true,
       upgrade: null,
       upgradeDismissed: false,

@@ -72,7 +72,7 @@ export interface TokenQuotaMusicSettings {
 export const TOKEN_QUOTA_DEFAULT_MUSIC: TokenQuotaMusicSettings = {
   enabled: false,
   volume: 0.5,
-  style: 'major',
+  style: 'pentatonic',
   onlyCurrentSession: true,
 }
 

@@ -1,68 +1,80 @@
 /**
- * Live-composed ambient soundtrack driven by host actions (turns, steps,
- * tool calls, etc.). Three layers:
+ * 古风 live-composed soundtrack driven by host actions.
  *
- *  - **Pad**: a sustained three-note chord (triangle waves) that fades in when
- *    a request starts and crossfades to the next chord on every step.
- *  - **Bass**: one long root note per beat (lower octave), keeps the pulse.
- *  - **Melody**: an eighth-note scale line that dances inside the current
- *    chord — always in key, never a wrong note.
+ * Design: when a request starts the engine composes a *piece* — a guzheng-like
+ * plucked-string voice over a soft open-fifth drone (Web Audio synthesis; the
+ * MIDI output is switched to the Koto program so hardware synths match). The
+ * piece plays phrase after phrase so it never goes quiet while the model
+ * thinks or streams. Incoming events steer the piece instead of interrupting
+ * it: a step change glides the drone to the next mode centre and inserts a
+ * fast 过门 (fill); tool calls get a high plink; the ending gets a flute-like
+ * breath note and a descending glissando.
  *
- * Outputs through Web Audio (built-in synthesis) by default, and also sends
- * MIDI NoteOn/NoteOff to the first available MIDI output when one is detected
- * (both play simultaneously when MIDI is present — use the panel volume for
- * overall level, the MIDI output has its own gain on the receiver).
+ * Anti-runaway guards (the "endless drone" / hanging-MIDI-note problem):
+ *  - the host sends an SSE heartbeat every 5s; if it stops arriving the whole
+ *    engine fades out (a dead stream means no stop event will ever come),
+ *  - every MIDI NoteOn is registered and swept; `stopAll` also sends
+ *    All Notes Off (CC 123),
+ *  - Web Audio ramps never target zero exponentially and every oscillator is
+ *    explicitly stopped.
  *
  * @module @jxgame2020/dsh-token-quota/music
  */
 
 import type { TokenQuotaMusicAction, TokenQuotaMusicStyle } from '../types.ts'
 
-/** Scale degrees in semitones from the root. */
+/** Scale degrees in semitones from the (current) tonic. */
 const SCALES: Record<TokenQuotaMusicStyle, number[]> = {
   major: [0, 2, 4, 5, 7, 9, 11],
   minor: [0, 2, 3, 5, 7, 8, 10],
-  pentatonic: [0, 2, 4, 7, 9],
+  pentatonic: [0, 2, 4, 7, 9], // 宫商角徵羽
 }
 
 /**
- * Chord progression roots in semitones from the key centre. Loops — every
- * step advance moves one position forward.
+ * Tonic offsets for the progression — the piece rotates its mode centre on
+ * every step advance. For pentatonic this is 宫 → 羽 → 徵 → 商 (mode
+ * rotation on one scale), which is the classic gufeng colour.
  */
-const CHORD_PROGRESSIONS: Record<TokenQuotaMusicStyle, number[]> = {
-  major: [0, 9, 5, 7],        // I - vi - IV - V
-  minor: [0, 9, 4, 11],       // i - VI - III - VII
-  pentatonic: [0, 7, 2, 9],   // open fifths feel — root + 5th
+const PROGRESSION: Record<TokenQuotaMusicStyle, number[]> = {
+  major: [0, 9, 5, 7],
+  minor: [0, 8, 3, 10],
+  pentatonic: [0, 9, 7, 5],
 }
 
-/** Quality of each chord in the progression above. */
-type ChordQuality = 'major' | 'minor' | 'dim'
+/** One melodic step: scale degree (+ octave), held for `beats` beats. */
+type PhraseStep = { deg: number; beats: number; oct?: number }
+type Phrase = PhraseStep[]
 
-const CHORD_QUALITIES: Record<TokenQuotaMusicStyle, ChordQuality[]> = {
-  major: ['major', 'minor', 'major', 'major'],
-  minor: ['minor', 'major', 'major', 'major'],
-  pentatonic: ['major', 'major', 'major', 'major'],
-}
+/**
+ * Phrase bank — pentatonic-degree melodies that also read fine on 7-note
+ * scales. Degrees index the current scale (values ≥ scale length wrap up an
+ * octave).
+ */
+const PHRASES: Phrase[] = [
+  [{ deg: 0, beats: 2 }, { deg: 1, beats: 1 }, { deg: 2, beats: 1 }, { deg: 3, beats: 2 }, { deg: 2, beats: 1 }, { deg: 1, beats: 1 }, { deg: 0, beats: 3 }],
+  [{ deg: 5, beats: 1 }, { deg: 4, beats: 1 }, { deg: 3, beats: 2 }, { deg: 2, beats: 1 }, { deg: 1, beats: 2 }, { deg: 0, beats: 3 }],
+  [{ deg: 2, beats: 1 }, { deg: 3, beats: 1 }, { deg: 4, beats: 2 }, { deg: 5, beats: 1 }, { deg: 4, beats: 1 }, { deg: 3, beats: 2 }, { deg: 1, beats: 2 }, { deg: 0, beats: 2 }],
+  [{ deg: 4, beats: 2 }, { deg: 3, beats: 1 }, { deg: 2, beats: 1 }, { deg: 3, beats: 2 }, { deg: 1, beats: 1 }, { deg: 2, beats: 1 }, { deg: 0, beats: 4 }],
+]
+
+/** 过门 — a fast run played when a step (new phase) starts. */
+const FILL: Phrase = [
+  { deg: 0, beats: 0.5 }, { deg: 1, beats: 0.5 }, { deg: 2, beats: 0.5 }, { deg: 3, beats: 0.5 },
+  { deg: 4, beats: 0.5 }, { deg: 5, beats: 0.5 }, { deg: 4, beats: 0.5 }, { deg: 3, beats: 0.5 },
+]
 
 /** Turn a MIDI note number into a frequency (equal temperament, A4 = 440). */
 function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12)
 }
 
-/** Interval in semitones from the root for each chord-tone. */
-function chordIntervals(quality: ChordQuality): [number, number, number] {
-  const third = quality === 'major' ? 4 : quality === 'minor' ? 3 : 3
-  const fifth = quality === 'dim' ? 6 : 7
-  return [0, third, fifth]
-}
+/** General-MIDI program closest to a guzheng: 108 Koto (0-indexed 106). */
+const GM_PROGRAM_KOTO = 106
 
 /**
- * Live-composed music engine driven by host actions.
- *
- * The engine is idle until `ensureStarted()` is called from a user gesture
- * (the panel switch), and only produces sound while `enabled` is true AND a
- * request is in flight (pad + bass + melody are gated by `startPad` /
- * `stopPad`).
+ * Live-composed gufeng engine. Idle until `ensureStarted()` runs inside a
+ * user gesture; silent while `enabled` is false; the piece runs only between
+ * `request/header` (start) and `assistant/message` / `turn/end` (stop).
  */
 export class TokenQuotaMusic {
   private audio: AudioContext | null = null
@@ -71,34 +83,35 @@ export class TokenQuotaMusic {
 
   private enabled = false
   private volume = 0.5
-  private style: TokenQuotaMusicStyle = 'major'
+  private style: TokenQuotaMusicStyle = 'pentatonic'
 
   // Composition state
-  private chordIndex = 0
-  private stepCount = 0
-  private toolCount = 0
+  private playing = false
+  private tonicIndex = 0
+  private phraseIndex = 0
+  private phraseTimer: ReturnType<typeof setTimeout> | undefined
 
-  // Pad layer (sustained chord)
-  private padOscs: OscillatorNode[] = []
-  private padGain: GainNode | null = null
-  private padTarget = 0
-  private padActive = false
+  // Drone layer (sustained open fifth under the plucks)
+  private droneOscs: OscillatorNode[] = []
+  private droneGain: GainNode | null = null
+  private droneFilter: BiquadFilterNode | null = null
+  private droneActive = false
 
-  // Bass + melody timing (shared beat clock)
-  private beatTimer: ReturnType<typeof setInterval> | undefined
-  private beatIndex = 0 // 0..3 inside a 4-beat bar
-  private melodyDirection = 1
-  private melodyDegree = 0
+  // Watchdog: host heartbeat freshness (ms timestamp)
+  private lastStreamActivity = 0
+  private watchdogTimer: ReturnType<typeof setInterval> | undefined
 
-  // Current chord (root midi + quality) for the melody and bass.
-  private currentRoot = 60 // C4
-  private currentQuality: ChordQuality = 'major'
+  // MIDI note registry (anti hanging-note)
+  private readonly activeMidiNotes = new Set<number>()
 
-  /** Base MIDI note of the key. C4 = middle C. */
+  /** Base MIDI note of the tonic. C4 = middle C. */
   private static readonly BASE_MIDI = 60
 
-  /** Beat length in ms — eighth note = beat / 2. */
-  private static readonly BEAT_MS = 640
+  /** Beat length in ms — the phrase rhythm is measured in these. */
+  private static readonly BEAT_MS = 480
+
+  /** Stop everything if the SSE stream goes silent this long. */
+  private static readonly STREAM_TIMEOUT_MS = 12_000
 
   /** True once the audio context has been started (needs a user gesture). */
   get started(): boolean {
@@ -106,9 +119,8 @@ export class TokenQuotaMusic {
   }
 
   /**
-   * Start the audio context and try to find a MIDI output.
-   * Must be called inside a user gesture (the panel switch click) so the
-   * AudioContext can resume. Safe to call multiple times.
+   * Start the audio context and probe for a MIDI output (once). Must be
+   * called inside a user gesture so the AudioContext can resume.
    */
   async ensureStarted(): Promise<boolean> {
     if (this.audio !== null) return true
@@ -120,7 +132,9 @@ export class TokenQuotaMusic {
       this.audio = null
       return false
     }
-    // MIDI: try once; we don't re-probe (browser asks for permission only once).
+    // MIDI: probe once; switch the receiver to a plucked-string program so
+    // the timbre matches the gufeng idea (receivers that ignore program
+    // change just keep their own patch).
     if (!this.midiDetected && 'requestMIDIAccess' in navigator) {
       this.midiDetected = true
       try {
@@ -129,10 +143,21 @@ export class TokenQuotaMusic {
           this.midiOutput = output
           break
         }
+        try { this.midiOutput?.send([0xC0, GM_PROGRAM_KOTO]) } catch { /* optional */ }
       } catch {
-        // Permission denied or no MIDI hardware — stick to Web Audio.
         this.midiOutput = null
       }
+    }
+    // Stream watchdog runs for the whole engine lifetime; it only acts while
+    // a piece is playing.
+    if (this.watchdogTimer === undefined) {
+      this.lastStreamActivity = Date.now()
+      this.watchdogTimer = setInterval(() => {
+        if (this.playing && Date.now() - this.lastStreamActivity > TokenQuotaMusic.STREAM_TIMEOUT_MS) {
+          // Dead stream: no stop event will ever arrive — fade out.
+          this.stopPiece(false)
+        }
+      }, 4_000)
     }
     return true
   }
@@ -144,254 +169,333 @@ export class TokenQuotaMusic {
 
   setVolume(value: number): void {
     this.volume = Math.max(0, Math.min(1, value))
-    if (this.padGain !== null && this.audio !== null) {
-      this.padGain.gain.setValueAtTime(this.volume * this.padTarget, this.audio.currentTime)
-    }
   }
 
   setStyle(value: TokenQuotaMusicStyle): void {
     this.style = value
-    // Reset position so the new scale feels immediately.
-    this.melodyDegree = 0
-    this.melodyDirection = 1
   }
 
-  /** Handle one incoming host action and turn it into sound. */
+  /** Feed the engine one SSE activity timestamp (action or heartbeat). */
+  markStreamActivity(): void {
+    this.lastStreamActivity = Date.now()
+  }
+
+  /** Handle one incoming host action and steer the piece. */
   onAction(action: TokenQuotaMusicAction): void {
     if (!this.enabled || this.audio === null) return
     const base = TokenQuotaMusic.BASE_MIDI
     switch (action.type) {
       case 'turn/start':
-        this.stopAll()
-        this.chordIndex = 0
-        this.stepCount = 0
-        this.toolCount = 0
-        this.currentRoot = base
-        this.currentQuality = CHORD_QUALITIES[this.style][0] ?? 'major'
-        this.playChord(base, this.currentQuality, 1.6, 0.6)
+        this.stopPiece(false)
+        this.tonicIndex = 0
+        this.phraseIndex = 0
         break
-      case 'step/start': {
-        this.chordIndex = (this.chordIndex + 1) % CHORD_PROGRESSIONS[this.style].length
-        this.stepCount += 1
-        const root = base + (CHORD_PROGRESSIONS[this.style][this.chordIndex] ?? 0)
-        const quality = CHORD_QUALITIES[this.style][this.chordIndex] ?? 'major'
-        this.currentRoot = root
-        this.currentQuality = quality
-        if (this.padActive) this.crossfadePad(root, quality)
+      case 'request/header': {
+        if (!this.playing) this.startPiece()
+        else this.pluck(base + 24, 0.3) // light accent on a subsequent request
         break
       }
-      case 'request/header': {
-        // Kick off the full three-layer ambient bed — the model is thinking
-        // and the user is waiting; this is where the soundtrack lives.
-        this.startPad(this.currentRoot, this.currentQuality)
-        this.startBeatClock()
-        // Small melodic flicker on top to mark the exact start.
-        const degree = (this.stepCount * 2 + this.toolCount) % SCALES[this.style].length
-        const note = base + 12 + (SCALES[this.style][degree] ?? 0)
-        this.playNote(note, 0.25, 0.4)
+      case 'step/start': {
+        // New phase: rotate the tonic, glide the drone, insert a 过门 fill.
+        const prog = PROGRESSION[this.style]
+        this.tonicIndex = (this.tonicIndex + 1) % prog.length
+        const newRoot = base + (prog[this.tonicIndex] ?? 0)
+        this.glideDrone(newRoot)
+        if (this.playing) this.insertFill(newRoot)
         break
       }
       case 'tool/call':
-        this.toolCount += 1
-        // High plink + low percussive tap — stays distinguishable over the pad.
-        this.playNote(base + 24 + (this.toolCount % 3) * 2, 0.12, 0.45)
-        this.playNote(base - 12, 0.08, 0.3)
+        // High plink + low tap — distinct from the plucked melody.
+        this.pluck(base + 26, 0.45, 0.5)
+        this.pluck(base - 12, 0.3, 0.35)
         break
       case 'tool/result': {
         if (action.error) {
-          // Dissonant downward glint (two half-steps).
-          this.playNote(base + 13, 0.18, 0.4)
-          setTimeout(() => this.playNote(base + 12, 0.25, 0.4), 90)
+          this.pluck(base + 13, 0.4, 0.6)
+          setTimeout(() => this.pluck(base + 12, 0.4, 0.9), 90)
         } else {
-          // Upward resolution.
-          this.playNote(base + 9, 0.14, 0.35)
-          setTimeout(() => this.playNote(base + 11, 0.22, 0.35), 70)
+          this.pluck(base + 9, 0.35, 0.6)
+          setTimeout(() => this.pluck(base + 11, 0.35, 0.9), 70)
         }
         break
       }
       case 'assistant/attempt':
-        // Failed attempt: wind down a moment and play a falling tension figure.
-        this.playNote(base + 8, 0.18, 0.4)
-        setTimeout(() => this.playNote(base + 7, 0.2, 0.4), 100)
-        setTimeout(() => this.playNote(base + 5, 0.3, 0.4), 200)
+        // Failed attempt: falling tension figure.
+        this.pluck(base + 8, 0.4, 0.8)
+        setTimeout(() => this.pluck(base + 7, 0.4, 0.8), 110)
+        setTimeout(() => this.pluck(base + 5, 0.4, 0.8), 220)
         break
       case 'assistant/message':
-        this.stopBeatClock()
-        this.stopPad()
-        if (action.interrupted) {
-          this.playChord(base + 7, 'dim', 0.9, 0.55)
-        } else {
-          this.playChord(this.currentRoot, this.currentQuality, 1.1, 0.6)
-        }
+        // Phrase ends; the turn may continue (more steps) — keep the drone
+        // breathing but stop the melody, ending with a breath note.
+        this.stopMelody()
+        this.breath(action.interrupted ? base + 6 : base + 12, 1.6)
         break
       case 'turn/end':
-        this.stopAll()
-        // Final tonic chord, longer release.
-        this.playChord(base, this.style === 'minor' ? 'minor' : 'major', 2.4, 0.7)
-        this.chordIndex = 0
+        this.stopPiece(true)
         break
     }
   }
 
-  // ── pad layer (sustained chord) ────────────────────────────────────────
+  // ── piece lifecycle ───────────────────────────────────────────────────
 
-  /** Start the pad from silence, fading in to the target level. */
-  private startPad(rootMidi: number, quality: ChordQuality): void {
+  /** Start a new piece: drone + ascending glissando + phrase chain. */
+  private startPiece(): void {
+    if (!this.audio || this.playing) return
+    this.playing = true
+    this.tonicIndex = 0
+    this.phraseIndex = 0
+    const root = TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][0] ?? 0)
+    this.startDrone(root)
+    // Intro glissando — the guzheng sweep that announces the piece.
+    const scale = SCALES[this.style]
+    let t = 0
+    for (let i = 0; i < 8; i++) {
+      const deg = i % scale.length
+      const oct = Math.floor(i / scale.length)
+      const note = root + 12 * oct + (scale[deg] ?? 0)
+      setTimeout(() => this.pluck(note, 0.3), t)
+      t += 150
+    }
+    // First phrase starts right after the glissando.
+    this.phraseTimer = setTimeout(() => this.playPhrase(), t + 100)
+  }
+
+  /** Play one phrase, then chain into the next after a one-beat rest. */
+  private playPhrase(): void {
+    if (!this.playing || !this.audio) return
+    const root = TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][this.tonicIndex] ?? 0)
+    const scale = SCALES[this.style]
+    const phrase = PHRASES[this.phraseIndex % PHRASES.length]!
+    this.phraseIndex += 1
+    let t = 0
+    for (const step of phrase) {
+      const note = root + (scale[step.deg % scale.length] ?? 0) + 12 * Math.floor(step.deg / scale.length)
+      const delay = t
+      setTimeout(() => {
+        if (this.playing) this.pluck(note, 0.34)
+      }, delay)
+      t += step.beats * TokenQuotaMusic.BEAT_MS
+    }
+    this.phraseTimer = setTimeout(() => this.playPhrase(), t + TokenQuotaMusic.BEAT_MS)
+  }
+
+  /** Insert a 过门 fill: pause the chain, play the run, resume after. */
+  private insertFill(root: number): void {
     if (!this.audio) return
-    if (this.padActive) return
+    this.stopMelody()
+    const scale = SCALES[this.style]
+    let t = 0
+    for (const step of FILL) {
+      const note = root + (scale[step.deg % scale.length] ?? 0) + 12 * Math.floor(step.deg / scale.length)
+      const delay = t
+      setTimeout(() => {
+        if (this.playing) this.pluck(note, 0.32, 0.7)
+      }, delay)
+      t += step.beats * TokenQuotaMusic.BEAT_MS
+    }
+    this.phraseTimer = setTimeout(() => this.playPhrase(), t + 60)
+  }
+
+  /** Stop the melody chain (drone keeps fading naturally). */
+  private stopMelody(): void {
+    if (this.phraseTimer !== undefined) {
+      clearTimeout(this.phraseTimer)
+      this.phraseTimer = undefined
+    }
+  }
+
+  /** Stop the whole piece; `final` adds the closing cadence gestures. */
+  private stopPiece(final: boolean): void {
+    this.stopMelody()
+    this.playing = false
+    if (final && this.audio) {
+      const base = TokenQuotaMusic.BASE_MIDI
+      // Descending pentatonic glissando + tonic open-fifth pluck chord.
+      const scale = SCALES[this.style]
+      let t = 0
+      for (let i = 7; i >= 0; i--) {
+        const deg = i % scale.length
+        const oct = Math.floor(i / scale.length)
+        const note = base + 12 * oct + (scale[deg] ?? 0)
+        setTimeout(() => this.pluck(note, 0.3), t)
+        t += 120
+      }
+      setTimeout(() => {
+        this.pluck(base, 0.5)
+        this.pluck(base + 7, 0.45)
+        this.pluck(base + 12, 0.4)
+        this.pluck(base - 12, 0.5)
+      }, t + 150)
+    }
+    this.fadeDrone(final ? 1.2 : 0.8)
+    this.allMidiOff()
+  }
+
+  /** Hard stop everything (master switch off / teardown). */
+  private stopAll(): void {
+    this.stopPiece(false)
+  }
+
+  // ── drone layer ───────────────────────────────────────────────────────
+
+  /** Start the sustained open fifth (root + fifth below octave root). */
+  private startDrone(root: number): void {
+    if (!this.audio || this.droneActive) return
     const now = this.audio.currentTime
     const gain = this.audio.createGain()
     gain.gain.setValueAtTime(0, now)
-    gain.connect(this.audio.destination)
-    const intervals = chordIntervals(quality)
+    const filter = this.audio.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.value = 620
+    filter.Q.value = 0.4
+    gain.connect(filter)
+    filter.connect(this.audio.destination)
     const oscs: OscillatorNode[] = []
-    for (const interval of intervals) {
+    for (const interval of [-12, -5]) {
       const osc = this.audio.createOscillator()
-      osc.type = 'triangle'
-      osc.frequency.value = midiToFreq(rootMidi + interval)
+      osc.type = 'sine'
+      osc.frequency.value = midiToFreq(root + interval)
       osc.connect(gain)
       osc.start(now)
       oscs.push(osc)
     }
-    this.padOscs = oscs
-    this.padGain = gain
-    this.padTarget = 0.18
-    gain.gain.linearRampToValueAtTime(this.volume * this.padTarget, now + 0.6)
-    this.padActive = true
+    this.droneOscs = oscs
+    this.droneGain = gain
+    this.droneFilter = filter
+    this.droneActive = true
+    gain.gain.linearRampToValueAtTime(this.volume * 0.07, now + 1.4)
   }
 
-  /** Smoothly morph the pad to a new root + quality. */
-  private crossfadePad(rootMidi: number, quality: ChordQuality): void {
-    if (!this.audio || !this.padActive || this.padGain === null) return
+  /** Glide the drone to a new tonic (mode rotation). */
+  private glideDrone(root: number): void {
+    if (!this.audio || !this.droneActive) return
     const now = this.audio.currentTime
-    const intervals = chordIntervals(quality)
-    this.padOscs.forEach((osc, i) => {
-      const interval = intervals[i] ?? 0
+    const targets = [root - 12, root - 5]
+    this.droneOscs.forEach((osc, i) => {
+      const target = targets[i] ?? root
       osc.frequency.setValueAtTime(osc.frequency.value, now)
-      osc.frequency.exponentialRampToValueAtTime(midiToFreq(rootMidi + interval), now + 0.5)
+      osc.frequency.exponentialRampToValueAtTime(midiToFreq(target), now + 0.9)
     })
   }
 
-  /** Fade the pad to silence, then stop the oscillators. */
-  private stopPad(): void {
-    if (!this.audio || !this.padActive || this.padGain === null) return
+  /** Fade the drone out and stop its oscillators. */
+  private fadeDrone(seconds: number): void {
+    if (!this.audio || !this.droneActive || this.droneGain === null) return
     const now = this.audio.currentTime
-    const gain = this.padGain
+    const gain = this.droneGain
     gain.gain.cancelScheduledValues(now)
-    gain.gain.setValueAtTime(gain.gain.value, now)
-    gain.gain.linearRampToValueAtTime(0, now + 0.8)
-    const oscs = this.padOscs
+    gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0001), now)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds)
+    const oscs = this.droneOscs
+    const filter = this.droneFilter
     setTimeout(() => {
       for (const osc of oscs) {
         try { osc.stop() } catch { /* ignore */ }
         try { osc.disconnect() } catch { /* ignore */ }
       }
+      try { filter?.disconnect() } catch { /* ignore */ }
       try { gain.disconnect() } catch { /* ignore */ }
-    }, 850)
-    this.padActive = false
-    this.padOscs = []
-    this.padGain = null
+    }, seconds * 1000 + 120)
+    this.droneActive = false
+    this.droneOscs = []
+    this.droneGain = null
+    this.droneFilter = null
   }
 
-  // ── beat clock (bass + melody) ────────────────────────────────────────
+  // ── voices ────────────────────────────────────────────────────────────
 
-  /** Start the per-beat clock that drives bass and melody. */
-  private startBeatClock(): void {
-    if (this.beatTimer !== undefined) return
-    this.beatIndex = 0
-    this.melodyDegree = 0
-    this.melodyDirection = 1
-    const tick = (): void => {
-      if (!this.audio || !this.enabled) return
-      // Bass note on beats 1 and 3 — root of the current chord, low octave.
-      if (this.beatIndex % 2 === 0) {
-        this.playNote(this.currentRoot - 12, 0.45, 0.3)
-      }
-      // Melody: eighth-note scale line inside the current chord.
-      const scale = SCALES[this.style]
-      const chordTones = new Set(chordIntervals(this.currentQuality))
-      // Walk up and down the scale, preferring chord tones on beats.
-      let degree = this.melodyDegree
-      // Pick the next scale degree in the current direction.
-      let next = degree + this.melodyDirection
-      if (next >= scale.length) {
-        this.melodyDirection = -1
-        next = scale.length - 2
-      } else if (next < 0) {
-        this.melodyDirection = 1
-        next = 0
-      }
-      this.melodyDegree = next
-      degree = next
-
-      // Make sure we land on a chord tone on the downbeat.
-      if (this.beatIndex % 2 === 0) {
-        const rootRel = (scale[degree] ?? 0) % 12
-        if (!chordTones.has(rootRel)) {
-          // Shift one step toward the nearest chord tone.
-          this.melodyDegree += this.melodyDirection
-          degree = this.melodyDegree
-        }
-      }
-      const note = this.currentRoot + 12 + (scale[degree] ?? 0)
-      // Melody note — slightly shorter than a beat, staccato feel.
-      this.playNote(note, 0.22, 0.28)
-      this.beatIndex = (this.beatIndex + 1) % 4
-    }
-    // First tick right away so the melody starts with the request.
-    tick()
-    this.beatTimer = setInterval(tick, TokenQuotaMusic.BEAT_MS)
-  }
-
-  private stopBeatClock(): void {
-    if (this.beatTimer !== undefined) {
-      clearInterval(this.beatTimer)
-      this.beatTimer = undefined
-    }
-  }
-
-  // ── teardown ──────────────────────────────────────────────────────────
-
-  private stopAll(): void {
-    this.stopBeatClock()
-    this.stopPad()
-  }
-
-  // ── primitive note / chord playback (shared by all layers) ────────────
-
-  /** Play one note: Web Audio + MIDI simultaneously when available. */
-  private playNote(midi: number, durationSec: number, velocity: number): void {
+  /**
+   * Guzheng-like pluck: two slightly detuned oscillators through a sweeping
+   * lowpass, fast attack and a long exponential decay (notes overlap, which
+   * keeps the piece continuous instead of choppy).
+   */
+  private pluck(midi: number, velocity: number, decaySec = 1.3): void {
     if (!this.audio) return
-    const peak = this.volume * velocity * 0.5
+    const peak = this.volume * velocity * 0.4
+    if (peak <= 0) return
+    const now = this.audio.currentTime
+    const freq = midiToFreq(midi)
+    const gain = this.audio.createGain()
+    const filter = this.audio.createBiquadFilter()
+    filter.type = 'lowpass'
+    filter.frequency.setValueAtTime(2400, now)
+    filter.frequency.exponentialRampToValueAtTime(420, now + decaySec)
+    filter.Q.value = 0.6
+    gain.gain.setValueAtTime(0.0001, now)
+    gain.gain.exponentialRampToValueAtTime(peak, now + 0.006)
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + decaySec)
+    filter.connect(gain)
+    gain.connect(this.audio.destination)
+    const osc1 = this.audio.createOscillator()
+    osc1.type = 'triangle'
+    osc1.frequency.value = freq
+    const osc2 = this.audio.createOscillator()
+    osc2.type = 'sine'
+    osc2.frequency.value = freq * 2.001 // shimmering octave partial
+    const octGain = this.audio.createGain()
+    octGain.gain.value = 0.35
+    osc1.connect(filter)
+    osc2.connect(octGain)
+    octGain.connect(filter)
+    osc1.start(now)
+    osc1.stop(now + decaySec + 0.1)
+    osc2.start(now)
+    osc2.stop(now + decaySec + 0.1)
+    this.midiNote(midi, decaySec, velocity)
+  }
+
+  /** Dizi-like breath note: sine with vibrato and a soft envelope. */
+  private breath(midi: number, durationSec: number): void {
+    if (!this.audio) return
+    const peak = this.volume * 0.22
     if (peak <= 0) return
     const now = this.audio.currentTime
     const osc = this.audio.createOscillator()
     osc.type = 'sine'
     osc.frequency.value = midiToFreq(midi)
+    const lfo = this.audio.createOscillator()
+    lfo.frequency.value = 5.2
+    const lfoGain = this.audio.createGain()
+    lfoGain.gain.value = 4.5 // Hz of vibrato depth
+    lfo.connect(lfoGain)
+    lfoGain.connect(osc.frequency)
     const gain = this.audio.createGain()
     gain.gain.setValueAtTime(0, now)
-    gain.gain.linearRampToValueAtTime(peak, now + 0.008)
-    gain.gain.exponentialRampToValueAtTime(0.001, now + durationSec)
+    gain.gain.linearRampToValueAtTime(peak, now + 0.18)
+    gain.gain.setValueAtTime(peak, now + durationSec * 0.6)
+    gain.gain.linearRampToValueAtTime(0.0001, now + durationSec)
     osc.connect(gain)
     gain.connect(this.audio.destination)
     osc.start(now)
-    osc.stop(now + durationSec + 0.05)
-
-    if (this.midiOutput !== null) {
-      const vel = Math.max(1, Math.floor(velocity * 127))
-      this.midiOutput.send([0x90, midi & 0x7F, vel])
-      setTimeout(() => {
-        this.midiOutput?.send([0x80, midi & 0x7F, 0])
-      }, durationSec * 1000)
-    }
+    lfo.start(now)
+    osc.stop(now + durationSec + 0.1)
+    lfo.stop(now + durationSec + 0.1)
+    this.midiNote(midi, durationSec, 0.5)
   }
 
-  /** Play a three-note chord plus a bass octave below. */
-  private playChord(rootMidi: number, quality: ChordQuality, durationSec: number, velocity: number): void {
-    const intervals = chordIntervals(quality)
-    for (const interval of intervals) {
-      this.playNote(rootMidi + interval, durationSec, velocity * 0.45)
+  // ── MIDI plumbing ─────────────────────────────────────────────────────
+
+  /** Send one MIDI note with a registered NoteOff (anti hanging note). */
+  private midiNote(midi: number, durationSec: number, velocity: number): void {
+    if (this.midiOutput === null) return
+    const note = midi & 0x7F
+    const vel = Math.max(1, Math.min(127, Math.floor(velocity * 127)))
+    try { this.midiOutput.send([0x90, note, vel]) } catch { return }
+    this.activeMidiNotes.add(note)
+    setTimeout(() => {
+      try { this.midiOutput?.send([0x80, note, 0]) } catch { /* ignore */ }
+      this.activeMidiNotes.delete(note)
+    }, Math.max(80, durationSec * 1000))
+  }
+
+  /** Silence every registered note and send All Notes Off. */
+  private allMidiOff(): void {
+    if (this.midiOutput === null) return
+    for (const note of this.activeMidiNotes) {
+      try { this.midiOutput.send([0x80, note, 0]) } catch { /* ignore */ }
     }
-    this.playNote(rootMidi - 12, durationSec * 1.1, velocity * 0.5)
+    this.activeMidiNotes.clear()
+    try { this.midiOutput.send([0xB0, 123, 0]) } catch { /* ignore */ }
   }
 }

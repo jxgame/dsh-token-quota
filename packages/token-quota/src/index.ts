@@ -552,7 +552,16 @@ export class TokenQuotaService extends Service {
         })
         this.musicClients.add(res)
         res.write(': token-quota music stream\n\n')
-        req.on('close', () => { this.musicClients.delete(res) })
+        // Heartbeat: the client uses this to detect a dead stream and stop
+        // the soundtrack (a stuck drone is worse than no music). SSE comments
+        // don't fire client listeners, so send a named event.
+        const hb = setInterval(() => {
+          try { res.write('event: hb\ndata: 1\n\n') } catch { clearInterval(hb) }
+        }, 5000)
+        req.on('close', () => {
+          clearInterval(hb)
+          this.musicClients.delete(res)
+        })
       },
     })
   }

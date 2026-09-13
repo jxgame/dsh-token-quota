@@ -121,6 +121,11 @@ export function apply(ctx: ClientContext): void {
   // output is driven simultaneously.
   const music = new TokenQuotaMusic()
   const sse = new EventSource('/token-quota/events')
+  // Host heartbeat every 5s: proves the stream is alive while the model
+  // thinks (no actions flow then). If it stops, the engine's watchdog fades
+  // the piece out instead of droning forever.
+  sse.addEventListener('hb', () => { music.markStreamActivity() })
+  sse.addEventListener('open', () => { music.markStreamActivity() })
   sse.addEventListener('action', (event) => {
     let action
     try {
@@ -142,7 +147,7 @@ export function apply(ctx: ClientContext): void {
   const musicDefaults = (raw: TokenQuotaSettings['music'] | undefined): TokenQuotaMusicSettings => ({
     enabled: raw?.enabled ?? false,
     volume: raw?.volume ?? 0.5,
-    style: raw?.style ?? 'major',
+    style: raw?.style ?? 'pentatonic',
     onlyCurrentSession: raw?.onlyCurrentSession ?? true,
   })
 
