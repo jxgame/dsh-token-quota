@@ -285,6 +285,11 @@
   background: var(--dsw-alias-bg-layer-1);
 }
 
+/* Music toggle: active state highlights the button. */
+.settingsBtnActive {
+  color: var(--dsw-alias-brand-primary);
+}
+
 /* Compact per-row select action next to the model name. */
 .selectBtn {
   flex: none;
@@ -460,6 +465,23 @@
 
 .checkUpdatesLabel input {
   margin: 0;
+}
+
+.checkUpdatesLabel input[type="range"] {
+  flex: 1;
+  min-width: 90px;
+  accent-color: var(--dsw-alias-brand-primary);
+}
+
+.checkUpdatesLabel select {
+  flex: 1;
+  min-width: 90px;
+  font-size: 12px;
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  padding: 2px 4px;
 }
 
 .checkBtn {

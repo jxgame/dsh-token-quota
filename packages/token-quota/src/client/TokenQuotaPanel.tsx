@@ -23,6 +23,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
+  TokenQuotaMusicStyle,
   TokenQuotaReset,
 } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
@@ -53,6 +54,12 @@ export interface TokenQuotaPanelInjected {
   setCheckUpdates: (enabled: boolean) => void
   /** Persist whether the panel dims while the pointer is away / typing. */
   setDimWhenIdle: (enabled: boolean) => void
+  /** Toggle the live music output (requires a user gesture to start audio). */
+  setMusicEnabled: (enabled: boolean) => void
+  /** Change the live-music master volume 0..1. */
+  setMusicVolume: (volume: number) => void
+  /** Change the live-music harmonic style. */
+  setMusicStyle: (style: TokenQuotaMusicStyle) => void
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
   /** Ask the Host to clear log entries before a date, then refresh the log. */
@@ -150,6 +157,7 @@ function loadPanelPos(): Pos | null {
  */
 export function TokenQuotaPanel({
   t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
+  setMusicEnabled, setMusicVolume, setMusicStyle,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -193,6 +201,9 @@ export function TokenQuotaPanel({
   const onFull = useStore(s => s.onFull)
   const checkUpdates = useStore(s => s.checkUpdates)
   const dimWhenIdle = useStore(s => s.dimWhenIdle)
+  const musicEnabled = useStore(s => s.musicEnabled)
+  const musicVolume = useStore(s => s.musicVolume)
+  const musicStyle = useStore(s => s.musicStyle)
   const upgrade = useStore(s => s.upgrade)
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
@@ -413,6 +424,14 @@ export function TokenQuotaPanel({
           <div className={css.subtitle}>{t('subtitle')}</div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
+          <button
+            type="button"
+            className={`${css.settingsBtn}${musicEnabled ? ` ${css.settingsBtnActive}` : ''}`}
+            title={t('musicHint')}
+            onClick={() => { setMusicEnabled(!musicEnabled) }}
+          >
+            {musicEnabled ? '🔊' : '♪'}
+          </button>
           <button type="button" className={css.settingsBtn} onClick={() => { actions.setLogOpen(true) }}>
             {t('logs')}
           </button>
@@ -647,6 +666,43 @@ export function TokenQuotaPanel({
                 <span>{t('dimWhenIdleLabel')}</span>
               </label>
               <div className={css.dialogHint}>{t('dimWhenIdleHint')}</div>
+            </div>
+            <div className={css.dialogSection}>
+              <label className={css.checkUpdatesLabel}>
+                <input
+                  type="checkbox"
+                  checked={musicEnabled}
+                  onChange={(event) => { setMusicEnabled(event.target.checked) }}
+                />
+                <span>{t('musicLabel')}</span>
+              </label>
+              <div className={css.dialogHint}>{t('musicHint')}</div>
+              {musicEnabled && (
+                <>
+                  <label className={css.checkUpdatesLabel}>
+                    <span>{t('musicVolume')}</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={musicVolume}
+                      onChange={(event) => { setMusicVolume(Number(event.target.value)) }}
+                    />
+                  </label>
+                  <label className={css.checkUpdatesLabel}>
+                    <span>{t('musicStyle')}</span>
+                    <select
+                      value={musicStyle}
+                      onChange={(event) => { setMusicStyle(event.target.value as TokenQuotaMusicStyle) }}
+                    >
+                      <option value="major">{t('musicStyleMajor')}</option>
+                      <option value="minor">{t('musicStyleMinor')}</option>
+                      <option value="pentatonic">{t('musicStylePentatonic')}</option>
+                    </select>
+                  </label>
+                </>
+              )}
             </div>
             <div className={css.dialogSection}>
               <div className={css.checkUpdatesRow}>

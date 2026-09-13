@@ -45,6 +45,43 @@ export interface TokenQuotaReset {
 /** Default reset: machine-local midnight (offset = host timezone, 00:00). */
 export const TOKEN_QUOTA_DEFAULT_RESET: TokenQuotaReset = { offsetHours: 0, hour: 0, minute: 0 }
 
+/** Harmonic palette of the live-composed soundtrack. */
+export const TOKEN_QUOTA_MUSIC_STYLES = ['major', 'minor', 'pentatonic'] as const
+
+/** One of the {@link TOKEN_QUOTA_MUSIC_STYLES} values. */
+export type TokenQuotaMusicStyle = typeof TOKEN_QUOTA_MUSIC_STYLES[number]
+
+/** Music playback settings (host-persisted; the browser half plays). */
+export interface TokenQuotaMusicSettings {
+  /** Master switch — off by default so the plugin stays silent until enabled. */
+  enabled: boolean
+  /** Output volume 0..1. */
+  volume: number
+  /** Harmonic style of the live composition. */
+  style: TokenQuotaMusicStyle
+}
+
+/** Default music settings: silent until the user flips the panel switch. */
+export const TOKEN_QUOTA_DEFAULT_MUSIC: TokenQuotaMusicSettings = {
+  enabled: false,
+  volume: 0.5,
+  style: 'major',
+}
+
+/**
+ * One host action streamed to the browser over the plugin's SSE route
+ * (`GET /token-quota/events`); the panel's music engine turns it into a note.
+ * `sessionId` lets the client filter to the currently-visible session.
+ */
+export type TokenQuotaMusicAction =
+  | { type: 'turn/start'; sessionId: string }
+  | { type: 'turn/end'; sessionId: string; reason: string }
+  | { type: 'step/start'; sessionId: string }
+  | { type: 'request/header'; sessionId: string; provider: string; model: string }
+  | { type: 'tool/call'; sessionId: string; name: string }
+  | { type: 'tool/result'; sessionId: string; error: boolean }
+  | { type: 'assistant/message'; sessionId: string; interrupted: boolean }
+
 /**
  * Per-model daily-limit settings document shape. Keys are `provider/model`
  * and a value of `0` (or an absent key) means unlimited for that model.
@@ -86,6 +123,12 @@ export interface TokenQuotaSettings {
    * midnight (the historical behaviour).
    */
   reset?: TokenQuotaReset
+  /**
+   * Live music output settings: a soundtrack composed from host actions
+   * (request starts, tool calls, turn ends) and played through Web Audio or
+   * an attached MIDI output. Off by default.
+   */
+  music: TokenQuotaMusicSettings
 }
 
 /** Token-quota plugin configuration. */

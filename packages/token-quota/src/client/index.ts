@@ -36,6 +36,8 @@ import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
+  TokenQuotaMusicAction,
+  TokenQuotaMusicStyle,
   TokenQuotaReset,
   TokenQuotaSettings,
   TokenQuotaSnapshot,
@@ -43,6 +45,7 @@ import type {
 import { createTokenQuotaPanelStore } from './store.ts'
 import type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
 import { TokenQuotaPanel } from './TokenQuotaPanel.tsx'
+import { TokenQuotaMusic } from './music.ts'
 import { en, zh, type TokenQuotaKey } from './locales.ts'
 
 export type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
@@ -109,6 +112,27 @@ export function apply(ctx: ClientContext): void {
   let lastMonitored: string[] | null = null
   let lastOnFull: TokenQuotaFullAction = 'stop'
   let lastReset: TokenQuotaReset | null = null
+
+  // Live music engine: subscribes to the plugin's SSE action stream and
+  // composes from host events. Web Audio plays by default; a detected MIDI
+  // output is driven simultaneously.
+  const music = new TokenQuotaMusic()
+  const sse = new EventSource('/token-quota/events')
+  sse.addEventListener('action', (event) => {
+    let action
+    try {
+      action = JSON.parse((event as MessageEvent).data) as TokenQuotaMusicAction
+    } catch {
+      return
+    }
+    // Only play actions for the currently-visible session; a root overlay
+    // panel isn't bound to a specific session, but its display tracks
+    // useSessions(s => s.current), so keeping the soundtrack on the same
+    // session avoids a cacophony from background conversations.
+    if (lastSessionId !== undefined && action.sessionId !== String(lastSessionId)) return
+    music.onAction(action)
+  })
+  ctx.effect(() => () => { sse.close() }, 'token-quota-ui: music SSE')
 
   const keyOf = (selection: ModelSelection | null): string | undefined => {
     if (selection === null) return undefined
@@ -274,6 +298,13 @@ export function apply(ctx: ClientContext): void {
     bound?.setCheckUpdates(doc?.checkUpdates ?? true)
     bound?.setDimWhenIdle(doc?.dimWhenIdle ?? false)
     bound?.setReset(lastReset)
+    const musicSettings = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    music.setEnabled(musicSettings.enabled)
+    music.setVolume(musicSettings.volume)
+    music.setStyle(musicSettings.style)
+    bound?.setMusicEnabled(musicSettings.enabled)
+    bound?.setMusicVolume(musicSettings.volume)
+    bound?.setMusicStyle(musicSettings.style)
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
         if (!response.ok) {
@@ -349,6 +380,31 @@ export function apply(ctx: ClientContext): void {
   const setDimWhenIdle = (enabled: boolean): void => {
     bound?.setDimWhenIdle(enabled)
     void scope.set('dimWhenIdle', enabled)
+  }
+
+  const setMusicEnabled = (enabled: boolean): void => {
+    const doc = scope.getSnapshot().value
+    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    current.enabled = enabled
+    void scope.set('music', current)
+    // First enable: start audio inside this user gesture (the panel switch
+    // click) so the AudioContext can resume; the settings pull that follows
+    // applies enabled/volume/style to the engine.
+    if (enabled) void music.ensureStarted()
+  }
+
+  const setMusicVolume = (volume: number): void => {
+    const doc = scope.getSnapshot().value
+    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    current.volume = Math.max(0, Math.min(1, volume))
+    void scope.set('music', current)
+  }
+
+  const setMusicStyle = (style: TokenQuotaMusicStyle): void => {
+    const doc = scope.getSnapshot().value
+    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    current.style = style
+    void scope.set('music', current)
   }
 
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
@@ -448,6 +504,7 @@ export function apply(ctx: ClientContext): void {
     return {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
+      setMusicEnabled, setMusicVolume, setMusicStyle,
     }
   }
 

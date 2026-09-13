@@ -52,10 +52,12 @@ import {
   type TokenQuotaEntry,
   type TokenQuotaLog,
   type TokenQuotaLogEntry,
+  type TokenQuotaMusicAction,
   type TokenQuotaReset,
   type TokenQuotaSettings,
   type TokenQuotaSnapshot,
   type TokenQuotaUpgrade,
+  TOKEN_QUOTA_DEFAULT_MUSIC,
 } from './types.ts'
 import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
 
@@ -235,6 +237,12 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
   reset: z.any().default(null),
+  // Live music: host persists the document, the browser half plays it.
+  music: z.object({
+    enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.enabled),
+    volume: z.number().min(0).max(1).default(TOKEN_QUOTA_DEFAULT_MUSIC.volume),
+    style: z.union(['major', 'minor', 'pentatonic']).default(TOKEN_QUOTA_DEFAULT_MUSIC.style),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_MUSIC }),
 })
 
 /** Serialized counter file shape. */
@@ -314,7 +322,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC } })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -341,6 +349,10 @@ export class TokenQuotaService extends Service {
   private disposeRouteCheck: (() => void) | undefined
   /** Disposer for the optional clear-log route (`POST /token-quota/clear-log`). */
   private disposeRouteClear: (() => void) | undefined
+  /** Disposer for the optional music-event route (`GET /token-quota/events`, SSE). */
+  private disposeRouteEvents: (() => void) | undefined
+  /** Live SSE subscribers receiving streamed music actions. */
+  private readonly musicClients = new Set<ServerResponse>()
   /** Disposer for the webServer-arrival watcher when the service mounts later. */
   private disposeRouteWatcher: (() => void) | undefined
 
@@ -377,6 +389,11 @@ export class TokenQuotaService extends Service {
             checkUpdates: doc.checkUpdates ?? true,
             dimWhenIdle: doc.dimWhenIdle ?? false,
             reset: doc.reset ?? undefined,
+            music: {
+              enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
+              volume: doc.music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
+              style: doc.music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
+            },
           }
         }
       },
@@ -522,6 +539,29 @@ export class TokenQuotaService extends Service {
         })
       },
     })
+    this.disposeRouteEvents = server.register({
+      kind: 'exact',
+      path: '/token-quota/events',
+      handler: (req, res) => {
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-store',
+          'connection': 'keep-alive',
+        })
+        this.musicClients.add(res)
+        res.write(': token-quota music stream\n\n')
+        req.on('close', () => { this.musicClients.delete(res) })
+      },
+    })
+  }
+
+  /** Broadcast one action to every open SSE music subscriber. */
+  private pushMusicAction(action: TokenQuotaMusicAction): void {
+    if (this.musicClients.size === 0) return
+    const data = `event: action\ndata: ${JSON.stringify(action)}\n\n`
+    for (const res of this.musicClients) {
+      try { res.write(data) } catch { this.musicClients.delete(res) }
+    }
   }
 
   /** Query the npm registry and rebuild the cached upgrade info (coalesced). */
@@ -687,20 +727,42 @@ export class TokenQuotaService extends Service {
   }
 
   private onSessionEvent(session: Session, event: SessionEvent): void {
-    if (event.type === 'request/header') {
-      const { provider, model } = event.data.header.config
-      this.headerKeys.set(session, tokenQuotaKey(provider, model))
-      return
-    }
-    if (event.type === 'assistant/message' && event.data.usage !== undefined) {
-      const key = this.headerKeys.get(session)
-      if (key === undefined) return
-      if (!this.isMonitored(key)) return
-      const tokens = usageTokens(event.data.usage)
-      if (tokens <= 0) return
-      this.rollCycleIfNeeded()
-      this.usage[key] = (this.usage[key] ?? 0) + tokens
-      this.scheduleWrite()
+    const sessionId = String(session.id)
+    switch (event.type) {
+      case 'turn/start':
+        this.pushMusicAction({ type: 'turn/start', sessionId })
+        break
+      case 'turn/end':
+        this.pushMusicAction({ type: 'turn/end', sessionId, reason: event.data.reason.kind })
+        break
+      case 'step/start':
+        this.pushMusicAction({ type: 'step/start', sessionId })
+        break
+      case 'request/header': {
+        const { provider, model } = event.data.header.config
+        this.headerKeys.set(session, tokenQuotaKey(provider, model))
+        this.pushMusicAction({ type: 'request/header', sessionId, provider, model })
+        return
+      }
+      case 'tool/call':
+        this.pushMusicAction({ type: 'tool/call', sessionId, name: event.data.name })
+        break
+      case 'tool/result':
+        this.pushMusicAction({ type: 'tool/result', sessionId, error: event.data.error !== undefined })
+        break
+      case 'assistant/message':
+        this.pushMusicAction({ type: 'assistant/message', sessionId, interrupted: event.data.interrupted === true })
+        if (event.data.usage !== undefined) {
+          const key = this.headerKeys.get(session)
+          if (key === undefined) return
+          if (!this.isMonitored(key)) return
+          const tokens = usageTokens(event.data.usage)
+          if (tokens <= 0) return
+          this.rollCycleIfNeeded()
+          this.usage[key] = (this.usage[key] ?? 0) + tokens
+          this.scheduleWrite()
+        }
+        break
     }
   }
 
@@ -917,6 +979,11 @@ export class TokenQuotaService extends Service {
     if (this.disposeRouteLog !== undefined) this.disposeRouteLog()
     if (this.disposeRouteCheck !== undefined) this.disposeRouteCheck()
     if (this.disposeRouteClear !== undefined) this.disposeRouteClear()
+    if (this.disposeRouteEvents !== undefined) this.disposeRouteEvents()
+    for (const res of this.musicClients) {
+      try { res.end() } catch { /* ignore */ }
+    }
+    this.musicClients.clear()
     this.flush()
   }
 

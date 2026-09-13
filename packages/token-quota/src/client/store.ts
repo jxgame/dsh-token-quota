@@ -14,6 +14,7 @@ import type { ModelProviderGroup, ModelSelection } from '@deepseek-ai/dsh-api-se
 import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
+  TokenQuotaMusicStyle,
   TokenQuotaReset,
   TokenQuotaSnapshot,
   TokenQuotaEntry,
@@ -69,6 +70,10 @@ export interface TokenQuotaPanelState {
   checkUpdates: boolean
   /** Whether the panel dims while the pointer is away / while typing. */
   dimWhenIdle: boolean
+  /** Live music settings (mirrored from the settings document). */
+  musicEnabled: boolean
+  musicVolume: number
+  musicStyle: TokenQuotaMusicStyle
   /** Latest upgrade availability from the Host; null = up to date or unknown. */
   upgrade: TokenQuotaUpgrade | null
   /** Whether the one-shot upgrade banner was dismissed for the current latest version. */
@@ -112,6 +117,9 @@ export type TokenQuotaPanelActions = {
   setSettings: (d: TokenQuotaPanelState, monitored: string[] | null, onFull: TokenQuotaFullAction) => void
   setCheckUpdates: (d: TokenQuotaPanelState, checkUpdates: boolean) => void
   setDimWhenIdle: (d: TokenQuotaPanelState, dimWhenIdle: boolean) => void
+  setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
+  setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
+  setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
   setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
@@ -146,6 +154,9 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       onFull: 'stop',
       checkUpdates: true,
       dimWhenIdle: false,
+      musicEnabled: false,
+      musicVolume: 0.5,
+      musicStyle: 'major',
       upgrade: null,
       upgradeDismissed: false,
       checkingUpdates: false,
@@ -171,6 +182,9 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setSettings: (d, monitored, onFull) => { d.monitored = monitored; d.onFull = onFull },
       setCheckUpdates: (d, checkUpdates) => { d.checkUpdates = checkUpdates },
       setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
+      setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
+      setMusicVolume: (d, volume) => { d.musicVolume = volume },
+      setMusicStyle: (d, style) => { d.musicStyle = style },
       setUpgrade: (d, upgrade) => {
         // Guard against host/client version skew (e.g. the host process still
         // runs an older bundle after an upgrade): when the reported "latest"
