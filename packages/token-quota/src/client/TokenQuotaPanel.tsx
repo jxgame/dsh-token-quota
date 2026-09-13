@@ -60,6 +60,8 @@ export interface TokenQuotaPanelInjected {
   setMusicVolume: (volume: number) => void
   /** Change the live-music harmonic style. */
   setMusicStyle: (style: TokenQuotaMusicStyle) => void
+  /** Toggle whether the soundtrack follows only the current session. */
+  setMusicOnlyCurrentSession: (only: boolean) => void
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
   /** Ask the Host to clear log entries before a date, then refresh the log. */
@@ -157,7 +159,7 @@ function loadPanelPos(): Pos | null {
  */
 export function TokenQuotaPanel({
   t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
-  setMusicEnabled, setMusicVolume, setMusicStyle,
+  setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -204,6 +206,7 @@ export function TokenQuotaPanel({
   const musicEnabled = useStore(s => s.musicEnabled)
   const musicVolume = useStore(s => s.musicVolume)
   const musicStyle = useStore(s => s.musicStyle)
+  const musicOnlyCurrentSession = useStore(s => s.musicOnlyCurrentSession)
   const upgrade = useStore(s => s.upgrade)
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
@@ -701,6 +704,15 @@ export function TokenQuotaPanel({
                       <option value="pentatonic">{t('musicStylePentatonic')}</option>
                     </select>
                   </label>
+                  <label className={css.checkUpdatesLabel}>
+                    <input
+                      type="checkbox"
+                      checked={musicOnlyCurrentSession}
+                      onChange={(event) => { setMusicOnlyCurrentSession(event.target.checked) }}
+                    />
+                    <span>{t('musicOnlyCurrentSessionLabel')}</span>
+                  </label>
+                  <div className={css.dialogHint}>{t('musicOnlyCurrentSessionHint')}</div>
                 </>
               )}
             </div>

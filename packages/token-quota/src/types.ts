@@ -59,6 +59,13 @@ export interface TokenQuotaMusicSettings {
   volume: number
   /** Harmonic style of the live composition. */
   style: TokenQuotaMusicStyle
+  /**
+   * When true, the soundtrack only follows the currently-visible session;
+   * background tasks (subagents, other open chats) stay silent. When false,
+   * every session on the profile contributes its events (can sound busy with
+   * concurrent work). On by default.
+   */
+  onlyCurrentSession: boolean
 }
 
 /** Default music settings: silent until the user flips the panel switch. */
@@ -66,6 +73,7 @@ export const TOKEN_QUOTA_DEFAULT_MUSIC: TokenQuotaMusicSettings = {
   enabled: false,
   volume: 0.5,
   style: 'major',
+  onlyCurrentSession: true,
 }
 
 /**

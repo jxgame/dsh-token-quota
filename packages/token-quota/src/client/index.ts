@@ -37,6 +37,7 @@ import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
   TokenQuotaMusicAction,
+  TokenQuotaMusicSettings,
   TokenQuotaMusicStyle,
   TokenQuotaReset,
   TokenQuotaSettings,
@@ -112,6 +113,8 @@ export function apply(ctx: ClientContext): void {
   let lastMonitored: string[] | null = null
   let lastOnFull: TokenQuotaFullAction = 'stop'
   let lastReset: TokenQuotaReset | null = null
+  // Whether the soundtrack is scoped to the currently-visible session only.
+  let lastOnlyCurrentSession = true
 
   // Live music engine: subscribes to the plugin's SSE action stream and
   // composes from host events. Web Audio plays by default; a detected MIDI
@@ -125,14 +128,23 @@ export function apply(ctx: ClientContext): void {
     } catch {
       return
     }
-    // Only play actions for the currently-visible session; a root overlay
-    // panel isn't bound to a specific session, but its display tracks
+    // When scoped, only play actions for the currently-visible session; a root
+    // overlay panel isn't bound to a specific session, but its display tracks
     // useSessions(s => s.current), so keeping the soundtrack on the same
     // session avoids a cacophony from background conversations.
-    if (lastSessionId !== undefined && action.sessionId !== String(lastSessionId)) return
+    if (lastOnlyCurrentSession && lastSessionId !== undefined
+      && action.sessionId !== String(lastSessionId)) return
     music.onAction(action)
   })
   ctx.effect(() => () => { sse.close() }, 'token-quota-ui: music SSE')
+
+  /** Build a writable music-settings clone with defaults applied. */
+  const musicDefaults = (raw: TokenQuotaSettings['music'] | undefined): TokenQuotaMusicSettings => ({
+    enabled: raw?.enabled ?? false,
+    volume: raw?.volume ?? 0.5,
+    style: raw?.style ?? 'major',
+    onlyCurrentSession: raw?.onlyCurrentSession ?? true,
+  })
 
   const keyOf = (selection: ModelSelection | null): string | undefined => {
     if (selection === null) return undefined
@@ -298,13 +310,15 @@ export function apply(ctx: ClientContext): void {
     bound?.setCheckUpdates(doc?.checkUpdates ?? true)
     bound?.setDimWhenIdle(doc?.dimWhenIdle ?? false)
     bound?.setReset(lastReset)
-    const musicSettings = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    const musicSettings = musicDefaults(doc?.music)
+    lastOnlyCurrentSession = musicSettings.onlyCurrentSession
     music.setEnabled(musicSettings.enabled)
     music.setVolume(musicSettings.volume)
     music.setStyle(musicSettings.style)
     bound?.setMusicEnabled(musicSettings.enabled)
     bound?.setMusicVolume(musicSettings.volume)
     bound?.setMusicStyle(musicSettings.style)
+    bound?.setMusicOnlyCurrentSession(musicSettings.onlyCurrentSession)
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
         if (!response.ok) {
@@ -384,7 +398,7 @@ export function apply(ctx: ClientContext): void {
 
   const setMusicEnabled = (enabled: boolean): void => {
     const doc = scope.getSnapshot().value
-    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    const current = musicDefaults(doc?.music)
     current.enabled = enabled
     void scope.set('music', current)
     // First enable: start audio inside this user gesture (the panel switch
@@ -395,15 +409,22 @@ export function apply(ctx: ClientContext): void {
 
   const setMusicVolume = (volume: number): void => {
     const doc = scope.getSnapshot().value
-    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    const current = musicDefaults(doc?.music)
     current.volume = Math.max(0, Math.min(1, volume))
     void scope.set('music', current)
   }
 
   const setMusicStyle = (style: TokenQuotaMusicStyle): void => {
     const doc = scope.getSnapshot().value
-    const current = { ...{ enabled: false, volume: 0.5, style: 'major' as const }, ...(doc?.music ?? {}) }
+    const current = musicDefaults(doc?.music)
     current.style = style
+    void scope.set('music', current)
+  }
+
+  const setMusicOnlyCurrentSession = (only: boolean): void => {
+    const doc = scope.getSnapshot().value
+    const current = musicDefaults(doc?.music)
+    current.onlyCurrentSession = only
     void scope.set('music', current)
   }
 
@@ -504,7 +525,7 @@ export function apply(ctx: ClientContext): void {
     return {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
-      setMusicEnabled, setMusicVolume, setMusicStyle,
+      setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
     }
   }
 

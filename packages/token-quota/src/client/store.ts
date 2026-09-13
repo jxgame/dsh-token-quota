@@ -74,6 +74,7 @@ export interface TokenQuotaPanelState {
   musicEnabled: boolean
   musicVolume: number
   musicStyle: TokenQuotaMusicStyle
+  musicOnlyCurrentSession: boolean
   /** Latest upgrade availability from the Host; null = up to date or unknown. */
   upgrade: TokenQuotaUpgrade | null
   /** Whether the one-shot upgrade banner was dismissed for the current latest version. */
@@ -120,6 +121,7 @@ export type TokenQuotaPanelActions = {
   setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
   setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
   setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
+  setMusicOnlyCurrentSession: (d: TokenQuotaPanelState, only: boolean) => void
   setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
@@ -157,6 +159,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       musicEnabled: false,
       musicVolume: 0.5,
       musicStyle: 'major',
+      musicOnlyCurrentSession: true,
       upgrade: null,
       upgradeDismissed: false,
       checkingUpdates: false,
@@ -185,6 +188,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
       setMusicVolume: (d, volume) => { d.musicVolume = volume },
       setMusicStyle: (d, style) => { d.musicStyle = style },
+      setMusicOnlyCurrentSession: (d, only) => { d.musicOnlyCurrentSession = only },
       setUpgrade: (d, upgrade) => {
         // Guard against host/client version skew (e.g. the host process still
         // runs an older bundle after an upgrade): when the reported "latest"

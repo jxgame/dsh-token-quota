@@ -242,6 +242,7 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
     enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.enabled),
     volume: z.number().min(0).max(1).default(TOKEN_QUOTA_DEFAULT_MUSIC.volume),
     style: z.union(['major', 'minor', 'pentatonic']).default(TOKEN_QUOTA_DEFAULT_MUSIC.style),
+    onlyCurrentSession: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession),
   }).default({ ...TOKEN_QUOTA_DEFAULT_MUSIC }),
 })
 
@@ -393,6 +394,7 @@ export class TokenQuotaService extends Service {
               enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
               volume: doc.music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
               style: doc.music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
+              onlyCurrentSession: doc.music?.onlyCurrentSession ?? TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession,
             },
           }
         }
