@@ -1,14 +1,17 @@
 /**
- * Live-composed soundtrack driven by host actions (turns, steps, tool calls,
- * etc.). Outputs through Web Audio (built-in synthesis) by default, and also
- * sends MIDI NoteOn/NoteOff to the first available MIDI output when one is
- * detected (both play simultaneously when MIDI is present — use the panel
- * volume for overall level, the MIDI output has its own gain on the receiver).
+ * Live-composed ambient soundtrack driven by host actions (turns, steps,
+ * tool calls, etc.). Three layers:
  *
- * The composition is intentionally simple: a fixed chord progression under a
- * scale-constrained melody, with one short musical gesture per host action.
- * It is meant as gentle ambience while waiting for LLM responses, not as a
- * full piece — everything stays in key so you can never hit a wrong note.
+ *  - **Pad**: a sustained three-note chord (triangle waves) that fades in when
+ *    a request starts and crossfades to the next chord on every step.
+ *  - **Bass**: one long root note per beat (lower octave), keeps the pulse.
+ *  - **Melody**: an eighth-note scale line that dances inside the current
+ *    chord — always in key, never a wrong note.
+ *
+ * Outputs through Web Audio (built-in synthesis) by default, and also sends
+ * MIDI NoteOn/NoteOff to the first available MIDI output when one is detected
+ * (both play simultaneously when MIDI is present — use the panel volume for
+ * overall level, the MIDI output has its own gain on the receiver).
  *
  * @module @jxgame2020/dsh-token-quota/music
  */
@@ -41,15 +44,26 @@ const CHORD_QUALITIES: Record<TokenQuotaMusicStyle, ChordQuality[]> = {
   pentatonic: ['major', 'major', 'major', 'major'],
 }
 
-/**
- * Turn a MIDI note number into a frequency (Hz) using equal temperament at
- * A4 = 440 Hz.
- */
+/** Turn a MIDI note number into a frequency (equal temperament, A4 = 440). */
 function midiToFreq(midi: number): number {
   return 440 * Math.pow(2, (midi - 69) / 12)
 }
 
-/** Live-composed music engine driven by host actions. */
+/** Interval in semitones from the root for each chord-tone. */
+function chordIntervals(quality: ChordQuality): [number, number, number] {
+  const third = quality === 'major' ? 4 : quality === 'minor' ? 3 : 3
+  const fifth = quality === 'dim' ? 6 : 7
+  return [0, third, fifth]
+}
+
+/**
+ * Live-composed music engine driven by host actions.
+ *
+ * The engine is idle until `ensureStarted()` is called from a user gesture
+ * (the panel switch), and only produces sound while `enabled` is true AND a
+ * request is in flight (pad + bass + melody are gated by `startPad` /
+ * `stopPad`).
+ */
 export class TokenQuotaMusic {
   private audio: AudioContext | null = null
   private midiOutput: MIDIOutput | null = null
@@ -59,29 +73,32 @@ export class TokenQuotaMusic {
   private volume = 0.5
   private style: TokenQuotaMusicStyle = 'major'
 
-  /** Current position in the chord progression (advances per step). */
+  // Composition state
   private chordIndex = 0
-  /** Step counter — used for melody degree selection. */
   private stepCount = 0
-  /** Tool counter — used for tool-note pitch. */
   private toolCount = 0
 
-  /**
-   * Progress layer: while a request is in flight (thinking + streaming) the
-   * engine ticks a quiet scale-walking background note every tick so the wait
-   * is audible. Cleared on assistant/message, assistant/attempt or turn/end.
-   */
-  private progressTimer: ReturnType<typeof setInterval> | undefined
-  /** Direction of the progress walk: +1 up the scale, -1 down. */
-  private progressDir = 1
-  /** Scale degree of the next progress note. */
-  private progressDegree = 0
+  // Pad layer (sustained chord)
+  private padOscs: OscillatorNode[] = []
+  private padGain: GainNode | null = null
+  private padTarget = 0
+  private padActive = false
 
-  /** Base MIDI note of the current key. C4 = middle C. */
+  // Bass + melody timing (shared beat clock)
+  private beatTimer: ReturnType<typeof setInterval> | undefined
+  private beatIndex = 0 // 0..3 inside a 4-beat bar
+  private melodyDirection = 1
+  private melodyDegree = 0
+
+  // Current chord (root midi + quality) for the melody and bass.
+  private currentRoot = 60 // C4
+  private currentQuality: ChordQuality = 'major'
+
+  /** Base MIDI note of the key. C4 = middle C. */
   private static readonly BASE_MIDI = 60
 
-  /** Tick interval of the progress layer (ms). */
-  private static readonly PROGRESS_TICK_MS = 750
+  /** Beat length in ms — eighth note = beat / 2. */
+  private static readonly BEAT_MS = 640
 
   /** True once the audio context has been started (needs a user gesture). */
   get started(): boolean {
@@ -122,54 +139,21 @@ export class TokenQuotaMusic {
 
   setEnabled(value: boolean): void {
     this.enabled = value
-    if (!value) this.stopProgress()
+    if (!value) this.stopAll()
   }
 
   setVolume(value: number): void {
     this.volume = Math.max(0, Math.min(1, value))
+    if (this.padGain !== null && this.audio !== null) {
+      this.padGain.gain.setValueAtTime(this.volume * this.padTarget, this.audio.currentTime)
+    }
   }
 
   setStyle(value: TokenQuotaMusicStyle): void {
     this.style = value
-  }
-
-  // ── progress layer (while a request is in flight) ──────────────────────
-
-  /** Start the quiet in-flight background loop (idempotent). */
-  private startProgress(): void {
-    if (!this.audio || !this.enabled) return
-    if (this.progressTimer !== undefined) return
-    this.progressDegree = 0
-    this.progressDir = 1
-    const tick = (): void => {
-      if (!this.audio || !this.enabled) return
-      const scale = SCALES[this.style]
-      const degree = this.progressDegree % scale.length
-      const note = TokenQuotaMusic.BASE_MIDI + 12 + (scale[degree] ?? 0)
-      // Very quiet, short so it stays in the background.
-      this.playNote(note, 0.18, 0.22)
-      // Walk up and down the scale like a pendulum.
-      const next = this.progressDegree + this.progressDir
-      if (next >= scale.length) {
-        this.progressDir = -1
-        this.progressDegree = scale.length - 2
-      } else if (next < 0) {
-        this.progressDir = 1
-        this.progressDegree = 0
-      } else {
-        this.progressDegree = next
-      }
-    }
-    tick()
-    this.progressTimer = setInterval(tick, TokenQuotaMusic.PROGRESS_TICK_MS)
-  }
-
-  /** Stop the in-flight background loop. */
-  private stopProgress(): void {
-    if (this.progressTimer !== undefined) {
-      clearInterval(this.progressTimer)
-      this.progressTimer = undefined
-    }
+    // Reset position so the new scale feels immediately.
+    this.melodyDegree = 0
+    this.melodyDirection = 1
   }
 
   /** Handle one incoming host action and turn it into sound. */
@@ -178,107 +162,209 @@ export class TokenQuotaMusic {
     const base = TokenQuotaMusic.BASE_MIDI
     switch (action.type) {
       case 'turn/start':
-        this.stopProgress()
+        this.stopAll()
         this.chordIndex = 0
         this.stepCount = 0
         this.toolCount = 0
-        this.playChord(base, this.currentChordQuality(), 1.6, 0.55)
+        this.currentRoot = base
+        this.currentQuality = CHORD_QUALITIES[this.style][0] ?? 'major'
+        this.playChord(base, this.currentQuality, 1.6, 0.6)
         break
       case 'step/start': {
         this.chordIndex = (this.chordIndex + 1) % CHORD_PROGRESSIONS[this.style].length
         this.stepCount += 1
-        // bass note of the new chord
-        this.playNote(this.currentChordRoot(base) - 12, 1.2, 0.35)
-        // ascending arpeggio of the chord (3 notes)
-        const root = this.currentChordRoot(base)
-        const [d1, d2, d3] = this.arpeggioDegrees()
-        setTimeout(() => this.playNote(root + d1, 0.2, 0.4), 0)
-        setTimeout(() => this.playNote(root + d2, 0.2, 0.4), 80)
-        setTimeout(() => this.playNote(root + d3, 0.35, 0.4), 160)
+        const root = base + (CHORD_PROGRESSIONS[this.style][this.chordIndex] ?? 0)
+        const quality = CHORD_QUALITIES[this.style][this.chordIndex] ?? 'major'
+        this.currentRoot = root
+        this.currentQuality = quality
+        if (this.padActive) this.crossfadePad(root, quality)
         break
       }
       case 'request/header': {
-        // start the background progress layer so thinking + streaming feel audible
-        this.startProgress()
-        // short melodic flicker — pitch follows step + tool positions
+        // Kick off the full three-layer ambient bed — the model is thinking
+        // and the user is waiting; this is where the soundtrack lives.
+        this.startPad(this.currentRoot, this.currentQuality)
+        this.startBeatClock()
+        // Small melodic flicker on top to mark the exact start.
         const degree = (this.stepCount * 2 + this.toolCount) % SCALES[this.style].length
-        const note = base + 12 + SCALES[this.style][degree]!
-        this.playNote(note, 0.18, 0.35)
+        const note = base + 12 + (SCALES[this.style][degree] ?? 0)
+        this.playNote(note, 0.25, 0.4)
         break
       }
       case 'tool/call':
         this.toolCount += 1
-        // high plink + a low percussive tap (progress keeps going in the background)
+        // High plink + low percussive tap — stays distinguishable over the pad.
         this.playNote(base + 24 + (this.toolCount % 3) * 2, 0.12, 0.45)
-        this.playNote(base - 12, 0.08, 0.25)
+        this.playNote(base - 12, 0.08, 0.3)
         break
       case 'tool/result': {
         if (action.error) {
-          // dissonant downward glint (two half-steps)
+          // Dissonant downward glint (two half-steps).
           this.playNote(base + 13, 0.18, 0.4)
           setTimeout(() => this.playNote(base + 12, 0.25, 0.4), 90)
         } else {
-          // upward resolution
-          this.playNote(base + 9, 0.14, 0.3)
-          setTimeout(() => this.playNote(base + 11, 0.22, 0.3), 70)
+          // Upward resolution.
+          this.playNote(base + 9, 0.14, 0.35)
+          setTimeout(() => this.playNote(base + 11, 0.22, 0.35), 70)
         }
         break
       }
       case 'assistant/attempt':
-        // failed attempt: cut the progress and play a downward tension figure
-        this.stopProgress()
+        // Failed attempt: wind down a moment and play a falling tension figure.
         this.playNote(base + 8, 0.18, 0.4)
         setTimeout(() => this.playNote(base + 7, 0.2, 0.4), 100)
-        setTimeout(() => this.playNote(base + 5, 0.25, 0.4), 200)
+        setTimeout(() => this.playNote(base + 5, 0.3, 0.4), 200)
         break
       case 'assistant/message':
-        this.stopProgress()
+        this.stopBeatClock()
+        this.stopPad()
         if (action.interrupted) {
-          // interrupted turn: diminished tension chord
-          this.playChord(base + 7, 'dim', 0.9, 0.5)
+          this.playChord(base + 7, 'dim', 0.9, 0.55)
         } else {
-          // full cadence chord of the current step
-          this.playChord(this.currentChordRoot(base), this.currentChordQuality(), 1.1, 0.55)
+          this.playChord(this.currentRoot, this.currentQuality, 1.1, 0.6)
         }
         break
       case 'turn/end':
-        this.stopProgress()
-        // final tonic chord, longer release
-        this.playChord(base, this.style === 'minor' ? 'minor' : 'major', 2.2, 0.65)
+        this.stopAll()
+        // Final tonic chord, longer release.
+        this.playChord(base, this.style === 'minor' ? 'minor' : 'major', 2.4, 0.7)
         this.chordIndex = 0
         break
     }
   }
 
-  // ── internal helpers ──────────────────────────────────────────────
+  // ── pad layer (sustained chord) ────────────────────────────────────────
 
-  private currentChordRoot(base: number): number {
-    const prog = CHORD_PROGRESSIONS[this.style]
-    return base + prog[this.chordIndex % prog.length]!
+  /** Start the pad from silence, fading in to the target level. */
+  private startPad(rootMidi: number, quality: ChordQuality): void {
+    if (!this.audio) return
+    if (this.padActive) return
+    const now = this.audio.currentTime
+    const gain = this.audio.createGain()
+    gain.gain.setValueAtTime(0, now)
+    gain.connect(this.audio.destination)
+    const intervals = chordIntervals(quality)
+    const oscs: OscillatorNode[] = []
+    for (const interval of intervals) {
+      const osc = this.audio.createOscillator()
+      osc.type = 'triangle'
+      osc.frequency.value = midiToFreq(rootMidi + interval)
+      osc.connect(gain)
+      osc.start(now)
+      oscs.push(osc)
+    }
+    this.padOscs = oscs
+    this.padGain = gain
+    this.padTarget = 0.18
+    gain.gain.linearRampToValueAtTime(this.volume * this.padTarget, now + 0.6)
+    this.padActive = true
   }
 
-  private currentChordQuality(): ChordQuality {
-    const q = CHORD_QUALITIES[this.style]
-    return q[this.chordIndex % q.length] ?? 'major'
+  /** Smoothly morph the pad to a new root + quality. */
+  private crossfadePad(rootMidi: number, quality: ChordQuality): void {
+    if (!this.audio || !this.padActive || this.padGain === null) return
+    const now = this.audio.currentTime
+    const intervals = chordIntervals(quality)
+    this.padOscs.forEach((osc, i) => {
+      const interval = intervals[i] ?? 0
+      osc.frequency.setValueAtTime(osc.frequency.value, now)
+      osc.frequency.exponentialRampToValueAtTime(midiToFreq(rootMidi + interval), now + 0.5)
+    })
   }
 
-  /** Intervals of an ascending arpeggio from the chord root. */
-  private arpeggioDegrees(): [number, number, number] {
-    return this.style === 'pentatonic'
-      ? [0, 7, 12]
-      : this.currentChordQuality() === 'major'
-        ? [0, 4, 7]
-        : [0, 3, 7]
+  /** Fade the pad to silence, then stop the oscillators. */
+  private stopPad(): void {
+    if (!this.audio || !this.padActive || this.padGain === null) return
+    const now = this.audio.currentTime
+    const gain = this.padGain
+    gain.gain.cancelScheduledValues(now)
+    gain.gain.setValueAtTime(gain.gain.value, now)
+    gain.gain.linearRampToValueAtTime(0, now + 0.8)
+    const oscs = this.padOscs
+    setTimeout(() => {
+      for (const osc of oscs) {
+        try { osc.stop() } catch { /* ignore */ }
+        try { osc.disconnect() } catch { /* ignore */ }
+      }
+      try { gain.disconnect() } catch { /* ignore */ }
+    }, 850)
+    this.padActive = false
+    this.padOscs = []
+    this.padGain = null
   }
+
+  // ── beat clock (bass + melody) ────────────────────────────────────────
+
+  /** Start the per-beat clock that drives bass and melody. */
+  private startBeatClock(): void {
+    if (this.beatTimer !== undefined) return
+    this.beatIndex = 0
+    this.melodyDegree = 0
+    this.melodyDirection = 1
+    const tick = (): void => {
+      if (!this.audio || !this.enabled) return
+      // Bass note on beats 1 and 3 — root of the current chord, low octave.
+      if (this.beatIndex % 2 === 0) {
+        this.playNote(this.currentRoot - 12, 0.45, 0.3)
+      }
+      // Melody: eighth-note scale line inside the current chord.
+      const scale = SCALES[this.style]
+      const chordTones = new Set(chordIntervals(this.currentQuality))
+      // Walk up and down the scale, preferring chord tones on beats.
+      let degree = this.melodyDegree
+      // Pick the next scale degree in the current direction.
+      let next = degree + this.melodyDirection
+      if (next >= scale.length) {
+        this.melodyDirection = -1
+        next = scale.length - 2
+      } else if (next < 0) {
+        this.melodyDirection = 1
+        next = 0
+      }
+      this.melodyDegree = next
+      degree = next
+
+      // Make sure we land on a chord tone on the downbeat.
+      if (this.beatIndex % 2 === 0) {
+        const rootRel = (scale[degree] ?? 0) % 12
+        if (!chordTones.has(rootRel)) {
+          // Shift one step toward the nearest chord tone.
+          this.melodyDegree += this.melodyDirection
+          degree = this.melodyDegree
+        }
+      }
+      const note = this.currentRoot + 12 + (scale[degree] ?? 0)
+      // Melody note — slightly shorter than a beat, staccato feel.
+      this.playNote(note, 0.22, 0.28)
+      this.beatIndex = (this.beatIndex + 1) % 4
+    }
+    // First tick right away so the melody starts with the request.
+    tick()
+    this.beatTimer = setInterval(tick, TokenQuotaMusic.BEAT_MS)
+  }
+
+  private stopBeatClock(): void {
+    if (this.beatTimer !== undefined) {
+      clearInterval(this.beatTimer)
+      this.beatTimer = undefined
+    }
+  }
+
+  // ── teardown ──────────────────────────────────────────────────────────
+
+  private stopAll(): void {
+    this.stopBeatClock()
+    this.stopPad()
+  }
+
+  // ── primitive note / chord playback (shared by all layers) ────────────
 
   /** Play one note: Web Audio + MIDI simultaneously when available. */
   private playNote(midi: number, durationSec: number, velocity: number): void {
     if (!this.audio) return
-    const now = this.audio.currentTime
     const peak = this.volume * velocity * 0.5
     if (peak <= 0) return
-
-    // Web Audio: sine oscillator with a quick attack and exponential release.
+    const now = this.audio.currentTime
     const osc = this.audio.createOscillator()
     osc.type = 'sine'
     osc.frequency.value = midiToFreq(midi)
@@ -291,7 +377,6 @@ export class TokenQuotaMusic {
     osc.start(now)
     osc.stop(now + durationSec + 0.05)
 
-    // MIDI: same note on the first output, if any. Velocity 1..127.
     if (this.midiOutput !== null) {
       const vel = Math.max(1, Math.floor(velocity * 127))
       this.midiOutput.send([0x90, midi & 0x7F, vel])
@@ -303,12 +388,10 @@ export class TokenQuotaMusic {
 
   /** Play a three-note chord plus a bass octave below. */
   private playChord(rootMidi: number, quality: ChordQuality, durationSec: number, velocity: number): void {
-    const third = quality === 'major' ? 4 : 3
-    const fifth = quality === 'dim' ? 6 : 7
-    this.playNote(rootMidi, durationSec, velocity * 0.45)
-    this.playNote(rootMidi + third, durationSec, velocity * 0.35)
-    this.playNote(rootMidi + fifth, durationSec, velocity * 0.35)
-    // bass in the octave below — slightly longer for warmth
-    this.playNote(rootMidi - 12, durationSec * 1.15, velocity * 0.45)
+    const intervals = chordIntervals(quality)
+    for (const interval of intervals) {
+      this.playNote(rootMidi + interval, durationSec, velocity * 0.45)
+    }
+    this.playNote(rootMidi - 12, durationSec * 1.1, velocity * 0.5)
   }
 }
