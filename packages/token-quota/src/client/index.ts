@@ -219,7 +219,11 @@ export function apply(ctx: ClientContext): void {
     if (binding === undefined) return null
     const face = binding.session.projections.faceOf('modelSelection')
     const state = face.getSnapshot() as ModelSelectionProjection | null | undefined
-    return state?.lastUsed ?? null
+    // `next` (pending) is a selection made but not yet consumed by a request;
+    // `lastUsed` is the previous request's actual model. Show the pending
+    // selection first so the panel doesn't snap back before the next request
+    // retires it — matches ui-model-selection (`projected.next ?? default`).
+    return state?.next ?? state?.lastUsed ?? null
   }
   const refreshCurrent = (): void => {
     if (lastSessionId === undefined) return
