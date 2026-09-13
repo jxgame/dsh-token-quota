@@ -750,6 +750,9 @@ export class TokenQuotaService extends Service {
       case 'tool/result':
         this.pushMusicAction({ type: 'tool/result', sessionId, error: event.data.error !== undefined })
         break
+      case 'assistant/attempt':
+        this.pushMusicAction({ type: 'assistant/attempt', sessionId })
+        break
       case 'assistant/message':
         this.pushMusicAction({ type: 'assistant/message', sessionId, interrupted: event.data.interrupted === true })
         if (event.data.usage !== undefined) {

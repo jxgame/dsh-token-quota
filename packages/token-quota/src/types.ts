@@ -81,6 +81,7 @@ export type TokenQuotaMusicAction =
   | { type: 'tool/call'; sessionId: string; name: string }
   | { type: 'tool/result'; sessionId: string; error: boolean }
   | { type: 'assistant/message'; sessionId: string; interrupted: boolean }
+  | { type: 'assistant/attempt'; sessionId: string }
 
 /**
  * Per-model daily-limit settings document shape. Keys are `provider/model`

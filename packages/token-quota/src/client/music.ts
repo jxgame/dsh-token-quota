@@ -66,8 +66,22 @@ export class TokenQuotaMusic {
   /** Tool counter — used for tool-note pitch. */
   private toolCount = 0
 
+  /**
+   * Progress layer: while a request is in flight (thinking + streaming) the
+   * engine ticks a quiet scale-walking background note every tick so the wait
+   * is audible. Cleared on assistant/message, assistant/attempt or turn/end.
+   */
+  private progressTimer: ReturnType<typeof setInterval> | undefined
+  /** Direction of the progress walk: +1 up the scale, -1 down. */
+  private progressDir = 1
+  /** Scale degree of the next progress note. */
+  private progressDegree = 0
+
   /** Base MIDI note of the current key. C4 = middle C. */
   private static readonly BASE_MIDI = 60
+
+  /** Tick interval of the progress layer (ms). */
+  private static readonly PROGRESS_TICK_MS = 750
 
   /** True once the audio context has been started (needs a user gesture). */
   get started(): boolean {
@@ -108,6 +122,7 @@ export class TokenQuotaMusic {
 
   setEnabled(value: boolean): void {
     this.enabled = value
+    if (!value) this.stopProgress()
   }
 
   setVolume(value: number): void {
@@ -118,12 +133,52 @@ export class TokenQuotaMusic {
     this.style = value
   }
 
+  // ── progress layer (while a request is in flight) ──────────────────────
+
+  /** Start the quiet in-flight background loop (idempotent). */
+  private startProgress(): void {
+    if (!this.audio || !this.enabled) return
+    if (this.progressTimer !== undefined) return
+    this.progressDegree = 0
+    this.progressDir = 1
+    const tick = (): void => {
+      if (!this.audio || !this.enabled) return
+      const scale = SCALES[this.style]
+      const degree = this.progressDegree % scale.length
+      const note = TokenQuotaMusic.BASE_MIDI + 12 + (scale[degree] ?? 0)
+      // Very quiet, short so it stays in the background.
+      this.playNote(note, 0.18, 0.22)
+      // Walk up and down the scale like a pendulum.
+      const next = this.progressDegree + this.progressDir
+      if (next >= scale.length) {
+        this.progressDir = -1
+        this.progressDegree = scale.length - 2
+      } else if (next < 0) {
+        this.progressDir = 1
+        this.progressDegree = 0
+      } else {
+        this.progressDegree = next
+      }
+    }
+    tick()
+    this.progressTimer = setInterval(tick, TokenQuotaMusic.PROGRESS_TICK_MS)
+  }
+
+  /** Stop the in-flight background loop. */
+  private stopProgress(): void {
+    if (this.progressTimer !== undefined) {
+      clearInterval(this.progressTimer)
+      this.progressTimer = undefined
+    }
+  }
+
   /** Handle one incoming host action and turn it into sound. */
   onAction(action: TokenQuotaMusicAction): void {
     if (!this.enabled || this.audio === null) return
     const base = TokenQuotaMusic.BASE_MIDI
     switch (action.type) {
       case 'turn/start':
+        this.stopProgress()
         this.chordIndex = 0
         this.stepCount = 0
         this.toolCount = 0
@@ -143,6 +198,8 @@ export class TokenQuotaMusic {
         break
       }
       case 'request/header': {
+        // start the background progress layer so thinking + streaming feel audible
+        this.startProgress()
         // short melodic flicker — pitch follows step + tool positions
         const degree = (this.stepCount * 2 + this.toolCount) % SCALES[this.style].length
         const note = base + 12 + SCALES[this.style][degree]!
@@ -151,7 +208,7 @@ export class TokenQuotaMusic {
       }
       case 'tool/call':
         this.toolCount += 1
-        // high plink + a low percussive tap
+        // high plink + a low percussive tap (progress keeps going in the background)
         this.playNote(base + 24 + (this.toolCount % 3) * 2, 0.12, 0.45)
         this.playNote(base - 12, 0.08, 0.25)
         break
@@ -167,7 +224,15 @@ export class TokenQuotaMusic {
         }
         break
       }
+      case 'assistant/attempt':
+        // failed attempt: cut the progress and play a downward tension figure
+        this.stopProgress()
+        this.playNote(base + 8, 0.18, 0.4)
+        setTimeout(() => this.playNote(base + 7, 0.2, 0.4), 100)
+        setTimeout(() => this.playNote(base + 5, 0.25, 0.4), 200)
+        break
       case 'assistant/message':
+        this.stopProgress()
         if (action.interrupted) {
           // interrupted turn: diminished tension chord
           this.playChord(base + 7, 'dim', 0.9, 0.5)
@@ -177,6 +242,7 @@ export class TokenQuotaMusic {
         }
         break
       case 'turn/end':
+        this.stopProgress()
         // final tonic chord, longer release
         this.playChord(base, this.style === 'minor' ? 'minor' : 'major', 2.2, 0.65)
         this.chordIndex = 0
