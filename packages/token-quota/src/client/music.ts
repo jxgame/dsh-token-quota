@@ -95,6 +95,8 @@ export class TokenQuotaMusic {
   private phraseIndex = 0
   /** True when the next piece start should play the full intro glissando. */
   private introPending = true
+  /** Session the current piece belongs to (turn/start carries it). */
+  private sessionId: string | undefined
   private phraseTimer: ReturnType<typeof setTimeout> | undefined
 
   // Watchdog: host heartbeat freshness (ms timestamp)
@@ -180,20 +182,36 @@ export class TokenQuotaMusic {
     this.lastStreamActivity = Date.now()
   }
 
+  /** Stop any playing piece — e.g. when the panel switches sessions. */
+  stop(): void {
+    this.stopPiece(false)
+  }
+
   /** Handle one incoming host action and steer the piece. */
   onAction(action: TokenQuotaMusicAction): void {
     if (!this.enabled || this.audio === null) return
     const base = TokenQuotaMusic.BASE_MIDI
     switch (action.type) {
       case 'turn/start':
-        this.stopPiece(false)
+        // A new turn = the user sent a message: begin a fresh piece right
+        // away (request/header only fires on the first request of a session
+        // or on model changes — it cannot be the music's start trigger).
+        // If another session's music was still playing, stop it first.
+        if (this.sessionId !== undefined && this.sessionId !== action.sessionId) {
+          this.stopPiece(false)
+        }
+        this.sessionId = action.sessionId
+        this.stopMelody()
+        this.playing = false
         this.tonicIndex = 0
         this.phraseIndex = 0
         this.introPending = true
+        this.startPiece()
         break
       case 'request/header': {
+        // Safety net (and a light "request fired" accent when already playing).
         if (!this.playing) this.startPiece()
-        else this.pluck(base + 24, 0.3) // light accent on a subsequent request
+        else this.pluck(base + 24, 0.3)
         break
       }
       case 'step/start': {
@@ -228,10 +246,9 @@ export class TokenQuotaMusic {
         setTimeout(() => this.pluck(base + 5, 0.4, 0.8), 220)
         break
       case 'assistant/message':
-        // Sentence end: stop the phrase chain and breathe. The next
-        // request/header (next step or next turn) starts a fresh phrase.
-        this.stopMelody()
-        this.playing = false
+        // Sentence end: a soft breath cadence, but the bed keeps playing
+        // until the turn fully ends (turn/end), so thinking + streaming stay
+        // audible the whole way through.
         this.breath(action.interrupted ? base + 6 : base + 12, 1.6)
         break
       case 'turn/end':

@@ -285,9 +285,12 @@
   background: var(--dsw-alias-bg-layer-1);
 }
 
-/* Music toggle: active state highlights the button. */
+/* Music toggle: single note glyph; a bright brand ring + tint show "on". */
 .settingsBtnActive {
   color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.06));
+  box-shadow: inset 0 0 0 1px var(--dsw-alias-brand-primary);
+  font-weight: 700;
 }
 
 /* Compact per-row select action next to the model name. */

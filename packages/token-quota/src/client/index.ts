@@ -351,6 +351,10 @@ export function apply(ctx: ClientContext): void {
   }, 'token-quota-ui: snapshot poll + full strategy')
 
   const load = (sessionId: SessionId): void => {
+    // Switching the panel to another session: stop the previous session's
+    // soundtrack — while scoped to the current session its stop events are
+    // filtered out, so without this it could play forever.
+    if (lastSessionId !== undefined && lastSessionId !== sessionId) music.stop()
     lastSessionId = sessionId
     bound?.setLoading(true)
     bound?.setError(null)

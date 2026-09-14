@@ -429,11 +429,12 @@ export function TokenQuotaPanel({
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
           <button
             type="button"
+            aria-pressed={musicEnabled}
             className={`${css.settingsBtn}${musicEnabled ? ` ${css.settingsBtnActive}` : ''}`}
-            title={t('musicHint')}
+            title={`${t('musicLabel')}：${musicEnabled ? t('musicOn') : t('musicOff')}`}
             onClick={() => { setMusicEnabled(!musicEnabled) }}
           >
-            {musicEnabled ? '🔊' : '♪'}
+            ♪
           </button>
           <button type="button" className={css.settingsBtn} onClick={() => { actions.setLogOpen(true) }}>
             {t('logs')}
