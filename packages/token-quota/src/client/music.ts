@@ -2,21 +2,25 @@
  * 古风 live-composed soundtrack driven by host actions.
  *
  * Design: when a request starts the engine composes a *piece* — a guzheng-like
- * plucked-string voice over a soft open-fifth drone (Web Audio synthesis; the
- * MIDI output is switched to the Koto program so hardware synths match). The
- * piece plays phrase after phrase so it never goes quiet while the model
- * thinks or streams. Incoming events steer the piece instead of interrupting
- * it: a step change glides the drone to the next mode centre and inserts a
- * fast 过门 (fill); tool calls get a high plink; the ending gets a flute-like
- * breath note and a descending glissando.
+ * plucked-string voice (Web Audio synthesis; the MIDI output is switched to
+ * the Koto program so hardware synths match). The piece plays phrase after
+ * phrase so it stays alive while the model thinks or streams; incoming events
+ * steer the piece instead of interrupting it: a step change rotates the mode
+ * centre and inserts a fast 过门 (fill); tool calls get a high plink; the
+ * ending gets a dizi-like breath note and a descending glissando.
  *
- * Anti-runaway guards (the "endless drone" / hanging-MIDI-note problem):
+ * **No sustained tones by design.** Every voice is a decaying pluck (≤1.6s)
+ * or a fixed-duration breath note — there is no drone/pad oscillator that
+ * depends on a later stop event. A lost SSE event can at worst leave the
+ * phrase chain running, and the stream watchdog below stops that too, so a
+ * hanging "呜呜" hum is physically impossible.
+ *
+ * Anti-runaway guards:
  *  - the host sends an SSE heartbeat every 5s; if it stops arriving the whole
- *    engine fades out (a dead stream means no stop event will ever come),
- *  - every MIDI NoteOn is registered and swept; `stopAll` also sends
+ *    engine stops (a dead stream means no stop event will ever come),
+ *  - every MIDI NoteOn is registered and swept; stops also send
  *    All Notes Off (CC 123),
- *  - Web Audio ramps never target zero exponentially and every oscillator is
- *    explicitly stopped.
+ *  - every Web Audio oscillator is explicitly stopped at envelope end.
  *
  * @module @jxgame2020/dsh-token-quota/music
  */
@@ -42,7 +46,7 @@ const PROGRESSION: Record<TokenQuotaMusicStyle, number[]> = {
 }
 
 /** One melodic step: scale degree (+ octave), held for `beats` beats. */
-type PhraseStep = { deg: number; beats: number; oct?: number }
+type PhraseStep = { deg: number; beats: number }
 type Phrase = PhraseStep[]
 
 /**
@@ -89,13 +93,9 @@ export class TokenQuotaMusic {
   private playing = false
   private tonicIndex = 0
   private phraseIndex = 0
+  /** True when the next piece start should play the full intro glissando. */
+  private introPending = true
   private phraseTimer: ReturnType<typeof setTimeout> | undefined
-
-  // Drone layer (sustained open fifth under the plucks)
-  private droneOscs: OscillatorNode[] = []
-  private droneGain: GainNode | null = null
-  private droneFilter: BiquadFilterNode | null = null
-  private droneActive = false
 
   // Watchdog: host heartbeat freshness (ms timestamp)
   private lastStreamActivity = 0
@@ -154,7 +154,7 @@ export class TokenQuotaMusic {
       this.lastStreamActivity = Date.now()
       this.watchdogTimer = setInterval(() => {
         if (this.playing && Date.now() - this.lastStreamActivity > TokenQuotaMusic.STREAM_TIMEOUT_MS) {
-          // Dead stream: no stop event will ever arrive — fade out.
+          // Dead stream: no stop event will ever arrive — stop the piece.
           this.stopPiece(false)
         }
       }, 4_000)
@@ -189,6 +189,7 @@ export class TokenQuotaMusic {
         this.stopPiece(false)
         this.tonicIndex = 0
         this.phraseIndex = 0
+        this.introPending = true
         break
       case 'request/header': {
         if (!this.playing) this.startPiece()
@@ -196,12 +197,13 @@ export class TokenQuotaMusic {
         break
       }
       case 'step/start': {
-        // New phase: rotate the tonic, glide the drone, insert a 过门 fill.
+        // New phase: rotate the mode centre and insert a 过门 fill.
         const prog = PROGRESSION[this.style]
         this.tonicIndex = (this.tonicIndex + 1) % prog.length
-        const newRoot = base + (prog[this.tonicIndex] ?? 0)
-        this.glideDrone(newRoot)
-        if (this.playing) this.insertFill(newRoot)
+        if (this.playing) {
+          const newRoot = base + (prog[this.tonicIndex] ?? 0)
+          this.insertFill(newRoot)
+        }
         break
       }
       case 'tool/call':
@@ -226,9 +228,10 @@ export class TokenQuotaMusic {
         setTimeout(() => this.pluck(base + 5, 0.4, 0.8), 220)
         break
       case 'assistant/message':
-        // Phrase ends; the turn may continue (more steps) — keep the drone
-        // breathing but stop the melody, ending with a breath note.
+        // Sentence end: stop the phrase chain and breathe. The next
+        // request/header (next step or next turn) starts a fresh phrase.
         this.stopMelody()
+        this.playing = false
         this.breath(action.interrupted ? base + 6 : base + 12, 1.6)
         break
       case 'turn/end':
@@ -239,26 +242,33 @@ export class TokenQuotaMusic {
 
   // ── piece lifecycle ───────────────────────────────────────────────────
 
-  /** Start a new piece: drone + ascending glissando + phrase chain. */
+  /** Start a new piece: intro run, then the phrase chain. */
   private startPiece(): void {
     if (!this.audio || this.playing) return
     this.playing = true
-    this.tonicIndex = 0
-    this.phraseIndex = 0
-    const root = TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][0] ?? 0)
-    this.startDrone(root)
-    // Intro glissando — the guzheng sweep that announces the piece.
+    const root = TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][this.tonicIndex] ?? 0)
     const scale = SCALES[this.style]
-    let t = 0
-    for (let i = 0; i < 8; i++) {
-      const deg = i % scale.length
-      const oct = Math.floor(i / scale.length)
-      const note = root + 12 * oct + (scale[deg] ?? 0)
-      setTimeout(() => this.pluck(note, 0.3), t)
-      t += 150
+    if (this.introPending) {
+      // Full intro: the ascending guzheng glissando that announces the piece.
+      this.introPending = false
+      let t = 0
+      for (let i = 0; i < 8; i++) {
+        const note = root + 12 * Math.floor(i / scale.length) + (scale[i % scale.length] ?? 0)
+        setTimeout(() => {
+          if (this.playing) this.pluck(note, 0.3)
+        }, t)
+        t += 150
+      }
+      this.phraseTimer = setTimeout(() => this.playPhrase(), t + 100)
+    } else {
+      // Restart within the same turn: a short three-note pickup, no glissando.
+      for (let i = 0; i < 3; i++) {
+        setTimeout(() => {
+          if (this.playing) this.pluck(root + 12 + (scale[i] ?? 0), 0.3)
+        }, i * 140)
+      }
+      this.phraseTimer = setTimeout(() => this.playPhrase(), 480)
     }
-    // First phrase starts right after the glissando.
-    this.phraseTimer = setTimeout(() => this.playPhrase(), t + 100)
   }
 
   /** Play one phrase, then chain into the next after a one-beat rest. */
@@ -266,6 +276,9 @@ export class TokenQuotaMusic {
     if (!this.playing || !this.audio) return
     const root = TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][this.tonicIndex] ?? 0)
     const scale = SCALES[this.style]
+    // Soft low root pluck under each phrase — a foundation that decays away
+    // instead of a sustained drone (nothing here can hang).
+    this.pluck(root - 12, 0.28, 1.6)
     const phrase = PHRASES[this.phraseIndex % PHRASES.length]!
     this.phraseIndex += 1
     let t = 0
@@ -297,7 +310,7 @@ export class TokenQuotaMusic {
     this.phraseTimer = setTimeout(() => this.playPhrase(), t + 60)
   }
 
-  /** Stop the melody chain (drone keeps fading naturally). */
+  /** Stop the phrase chain. */
   private stopMelody(): void {
     if (this.phraseTimer !== undefined) {
       clearTimeout(this.phraseTimer)
@@ -315,9 +328,7 @@ export class TokenQuotaMusic {
       const scale = SCALES[this.style]
       let t = 0
       for (let i = 7; i >= 0; i--) {
-        const deg = i % scale.length
-        const oct = Math.floor(i / scale.length)
-        const note = base + 12 * oct + (scale[deg] ?? 0)
+        const note = base + 12 * Math.floor(i / scale.length) + (scale[i % scale.length] ?? 0)
         setTimeout(() => this.pluck(note, 0.3), t)
         t += 120
       }
@@ -328,7 +339,6 @@ export class TokenQuotaMusic {
         this.pluck(base - 12, 0.5)
       }, t + 150)
     }
-    this.fadeDrone(final ? 1.2 : 0.8)
     this.allMidiOff()
   }
 
@@ -337,78 +347,12 @@ export class TokenQuotaMusic {
     this.stopPiece(false)
   }
 
-  // ── drone layer ───────────────────────────────────────────────────────
-
-  /** Start the sustained open fifth (root + fifth below octave root). */
-  private startDrone(root: number): void {
-    if (!this.audio || this.droneActive) return
-    const now = this.audio.currentTime
-    const gain = this.audio.createGain()
-    gain.gain.setValueAtTime(0, now)
-    const filter = this.audio.createBiquadFilter()
-    filter.type = 'lowpass'
-    filter.frequency.value = 620
-    filter.Q.value = 0.4
-    gain.connect(filter)
-    filter.connect(this.audio.destination)
-    const oscs: OscillatorNode[] = []
-    for (const interval of [-12, -5]) {
-      const osc = this.audio.createOscillator()
-      osc.type = 'sine'
-      osc.frequency.value = midiToFreq(root + interval)
-      osc.connect(gain)
-      osc.start(now)
-      oscs.push(osc)
-    }
-    this.droneOscs = oscs
-    this.droneGain = gain
-    this.droneFilter = filter
-    this.droneActive = true
-    gain.gain.linearRampToValueAtTime(this.volume * 0.07, now + 1.4)
-  }
-
-  /** Glide the drone to a new tonic (mode rotation). */
-  private glideDrone(root: number): void {
-    if (!this.audio || !this.droneActive) return
-    const now = this.audio.currentTime
-    const targets = [root - 12, root - 5]
-    this.droneOscs.forEach((osc, i) => {
-      const target = targets[i] ?? root
-      osc.frequency.setValueAtTime(osc.frequency.value, now)
-      osc.frequency.exponentialRampToValueAtTime(midiToFreq(target), now + 0.9)
-    })
-  }
-
-  /** Fade the drone out and stop its oscillators. */
-  private fadeDrone(seconds: number): void {
-    if (!this.audio || !this.droneActive || this.droneGain === null) return
-    const now = this.audio.currentTime
-    const gain = this.droneGain
-    gain.gain.cancelScheduledValues(now)
-    gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0001), now)
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + seconds)
-    const oscs = this.droneOscs
-    const filter = this.droneFilter
-    setTimeout(() => {
-      for (const osc of oscs) {
-        try { osc.stop() } catch { /* ignore */ }
-        try { osc.disconnect() } catch { /* ignore */ }
-      }
-      try { filter?.disconnect() } catch { /* ignore */ }
-      try { gain.disconnect() } catch { /* ignore */ }
-    }, seconds * 1000 + 120)
-    this.droneActive = false
-    this.droneOscs = []
-    this.droneGain = null
-    this.droneFilter = null
-  }
-
   // ── voices ────────────────────────────────────────────────────────────
 
   /**
-   * Guzheng-like pluck: two slightly detuned oscillators through a sweeping
-   * lowpass, fast attack and a long exponential decay (notes overlap, which
-   * keeps the piece continuous instead of choppy).
+   * Guzheng-like pluck: a triangle voice plus a soft octave partial through a
+   * sweeping lowpass, fast attack and a long exponential decay (notes
+   * overlap, which keeps the piece continuous instead of choppy).
    */
   private pluck(midi: number, velocity: number, decaySec = 1.3): void {
     if (!this.audio) return
@@ -432,9 +376,9 @@ export class TokenQuotaMusic {
     osc1.frequency.value = freq
     const osc2 = this.audio.createOscillator()
     osc2.type = 'sine'
-    osc2.frequency.value = freq * 2.001 // shimmering octave partial
+    osc2.frequency.value = freq * 2 // octave partial (no detune beating)
     const octGain = this.audio.createGain()
-    octGain.gain.value = 0.35
+    octGain.gain.value = 0.25
     osc1.connect(filter)
     osc2.connect(octGain)
     octGain.connect(filter)
