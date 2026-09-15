@@ -211,7 +211,7 @@ export class TokenQuotaMusic {
       case 'request/header': {
         // Safety net (and a light "request fired" accent when already playing).
         if (!this.playing) this.startPiece()
-        else this.pluck(base + 24, 0.3)
+        else this.pluck(this.tone(5, 1), 0.3, 0.9)
         break
       }
       case 'step/start': {
@@ -224,33 +224,44 @@ export class TokenQuotaMusic {
         }
         break
       }
-      case 'tool/call':
-        // High plink + low tap — distinct from the plucked melody.
-        this.pluck(base + 26, 0.45, 0.5)
-        this.pluck(base - 12, 0.3, 0.35)
+      case 'tool/call': {
+        // Rising two-note figure drawn from the current scale (so it blends
+        // with the piece, not pokes out of it) over a soft low root for body.
+        this.pluck(this.tone(4, 1), 0.38, 0.9)
+        setTimeout(() => this.pluck(this.tone(5, 1), 0.34, 0.9), 90)
+        this.pluck(this.tonicRoot - 12, 0.22, 0.9)
         break
+      }
       case 'tool/result': {
         if (action.error) {
-          this.pluck(base + 13, 0.4, 0.6)
-          setTimeout(() => this.pluck(base + 12, 0.4, 0.9), 90)
+          // Deliberately sour (an error should feel off): a half-step below a
+          // scale tone, then sinking further.
+          const t = this.tone(2, 1)
+          this.pluck(t - 1, 0.4, 0.7)
+          setTimeout(() => this.pluck(t - 3, 0.4, 1.0), 110)
         } else {
-          this.pluck(base + 9, 0.35, 0.6)
-          setTimeout(() => this.pluck(base + 11, 0.35, 0.9), 70)
+          // Gentle in-key resolve landing on the tonic octave.
+          this.pluck(this.tone(3, 1), 0.34, 1.0)
+          setTimeout(() => this.pluck(this.tone(1, 1), 0.32, 1.0), 90)
+          setTimeout(() => this.pluck(this.tone(0, 1), 0.34, 1.2), 180)
         }
         break
       }
-      case 'assistant/attempt':
-        // Failed attempt: falling tension figure.
-        this.pluck(base + 8, 0.4, 0.8)
-        setTimeout(() => this.pluck(base + 7, 0.4, 0.8), 110)
-        setTimeout(() => this.pluck(base + 5, 0.4, 0.8), 220)
+      case 'assistant/attempt': {
+        // Failed attempt: falling in-key tension figure.
+        this.pluck(this.tone(4, 1), 0.36, 0.8)
+        setTimeout(() => this.pluck(this.tone(2, 1), 0.36, 0.9), 110)
+        setTimeout(() => this.pluck(this.tone(0), 0.36, 1.1), 220)
         break
-      case 'assistant/message':
-        // Sentence end: a soft breath cadence, but the bed keeps playing
-        // until the turn fully ends (turn/end), so thinking + streaming stay
-        // audible the whole way through.
-        this.breath(action.interrupted ? base + 6 : base + 12, 1.6)
+      }
+      case 'assistant/message': {
+        // Sentence end: a short cadence figure, then a breath on the tonic
+        // octave (in key — the old fixed C clashed with the mode rotation).
+        // The bed keeps playing until the turn fully ends (turn/end).
+        this.pluck(this.tone(2, 1), 0.3, 1.0)
+        setTimeout(() => this.breath(this.tone(0, action.interrupted ? 0 : 1), 1.4), 140)
         break
+      }
       case 'turn/end':
         this.stopPiece(true)
         break
@@ -258,6 +269,24 @@ export class TokenQuotaMusic {
   }
 
   // ── piece lifecycle ───────────────────────────────────────────────────
+
+  /** Current tonic root in MIDI note numbers. */
+  private get tonicRoot(): number {
+    return TokenQuotaMusic.BASE_MIDI + (PROGRESSION[this.style][this.tonicIndex] ?? 0)
+  }
+
+  /**
+   * A scale tone relative to the current tonic — degrees wrap up octaves
+   * (deg 5 on a 5-note scale = the octave). Event figures use this so every
+   * accent stays inside the key and melts into the piece instead of
+   * clashing with it.
+   */
+  private tone(deg: number, oct = 0): number {
+    const scale = SCALES[this.style]
+    const len = scale.length
+    const d = ((deg % len) + len) % len
+    return this.tonicRoot + 12 * (Math.floor(deg / len) + oct) + (scale[d] ?? 0)
+  }
 
   /** Start a new piece: intro run, then the phrase chain. */
   private startPiece(): void {

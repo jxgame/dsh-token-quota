@@ -170,6 +170,8 @@ export function TokenQuotaPanel({
   // so the chat content behind it stays readable; hovering restores it.
   const [hovered, setHovered] = useState(false)
   const [inputActive, setInputActive] = useState(false)
+  // Active settings-dialog tab: quota limits vs. live-music options.
+  const [settingsTab, setSettingsTab] = useState<'quota' | 'music'>('quota')
   // Copy-button feedback: which command was just copied (label flips to
   // 「已复制」for a moment so the click is perceivable).
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
@@ -570,6 +572,28 @@ export function TokenQuotaPanel({
               ×
             </button>
           </div>
+          <div className={css.dialogTabs} role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === 'quota'}
+              className={`${css.dialogTab}${settingsTab === 'quota' ? ` ${css.dialogTabActive}` : ''}`}
+              onClick={() => { setSettingsTab('quota') }}
+            >
+              {t('settingsTabQuota')}
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settingsTab === 'music'}
+              className={`${css.dialogTab}${settingsTab === 'music' ? ` ${css.dialogTabActive}` : ''}`}
+              onClick={() => { setSettingsTab('music') }}
+            >
+              {t('settingsTabMusic')}
+            </button>
+          </div>
+          {settingsTab === 'quota' && (
+            <>
             <div className={css.dialogSection}>
               <div className={css.dialogLabel}>{t('monitorLabel')}</div>
               <div className={css.monitorHint}>{t('monitorHint')}</div>
@@ -671,6 +695,9 @@ export function TokenQuotaPanel({
               </label>
               <div className={css.dialogHint}>{t('dimWhenIdleHint')}</div>
             </div>
+            </>
+            )}
+            {settingsTab === 'music' && (
             <div className={css.dialogSection}>
               <label className={css.checkUpdatesLabel}>
                 <input
@@ -717,6 +744,9 @@ export function TokenQuotaPanel({
                 </>
               )}
             </div>
+            )}
+            {settingsTab === 'quota' && (
+            <>
             <div className={css.dialogSection}>
               <div className={css.checkUpdatesRow}>
                 <label className={css.checkUpdatesLabel}>
@@ -746,6 +776,8 @@ export function TokenQuotaPanel({
                 <div className={css.checkErrorHint} role="alert">{upgradeError}</div>
               )}
             </div>
+            </>
+            )}
           </div>
       )}
       {logOpen && (
