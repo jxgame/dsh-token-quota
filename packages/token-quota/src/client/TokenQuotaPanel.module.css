@@ -577,6 +577,12 @@
   font-weight: 600;
 }
 
+/* Settings dialog: fixed height so switching tabs never resizes it; the
+ * content area scrolls instead. */
+.settingsDialog {
+  height: min(560px, 80vh);
+}
+
 .dialogTitle {
   font-size: 13px;
   font-weight: 600;

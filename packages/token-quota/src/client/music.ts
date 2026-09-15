@@ -120,6 +120,11 @@ export class TokenQuotaMusic {
     return this.audio !== null
   }
 
+  /** True when the master switch is on (mirrors the settings document). */
+  get isEnabled(): boolean {
+    return this.enabled
+  }
+
   /**
    * Start the audio context and probe for a MIDI output (once). Must be
    * called inside a user gesture so the AudioContext can resume.

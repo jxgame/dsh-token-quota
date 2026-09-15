@@ -143,6 +143,30 @@ export function apply(ctx: ClientContext): void {
   })
   ctx.effect(() => () => { sse.close() }, 'token-quota-ui: music SSE')
 
+  // Browser autoplay policy: an AudioContext only starts inside a user
+  // gesture. When the switch was left ON and the page reloads, the setting
+  // is enabled but no gesture has happened yet — so the engine stays silent
+  // until the user toggles it off/on. Arm a one-shot gesture listener that
+  // starts the engine on the first click / keypress instead.
+  const autoStartMusic = (): void => {
+    if (!music.isEnabled || music.started) {
+      if (music.started) {
+        window.removeEventListener('pointerdown', autoStartMusic)
+        window.removeEventListener('keydown', autoStartMusic)
+      }
+      return
+    }
+    void music.ensureStarted()
+    window.removeEventListener('pointerdown', autoStartMusic)
+    window.removeEventListener('keydown', autoStartMusic)
+  }
+  window.addEventListener('pointerdown', autoStartMusic)
+  window.addEventListener('keydown', autoStartMusic)
+  ctx.effect(() => () => {
+    window.removeEventListener('pointerdown', autoStartMusic)
+    window.removeEventListener('keydown', autoStartMusic)
+  }, 'token-quota-ui: music autostart gestures')
+
   /** Build a writable music-settings clone with defaults applied. */
   const musicDefaults = (raw: TokenQuotaSettings['music'] | undefined): TokenQuotaMusicSettings => ({
     enabled: raw?.enabled ?? false,
