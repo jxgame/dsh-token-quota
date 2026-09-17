@@ -27,7 +27,7 @@ import type {
   TokenQuotaReset,
 } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
-import { mergeModelRows } from './store.ts'
+import { mergeModelRows, reorderKeys } from './store.ts'
 import type { TokenQuotaKey } from './locales.ts'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
@@ -54,6 +54,8 @@ export interface TokenQuotaPanelInjected {
   setCheckUpdates: (enabled: boolean) => void
   /** Persist whether the panel dims while the pointer is away / typing. */
   setDimWhenIdle: (enabled: boolean) => void
+  /** Persist the drag-to-reorder display order of model rows. */
+  setModelOrder: (order: string[]) => void
   /** Toggle the live music output (requires a user gesture to start audio). */
   setMusicEnabled: (enabled: boolean) => void
   /** Change the live-music master volume 0..1. */
@@ -158,7 +160,7 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder,
   setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
@@ -172,6 +174,10 @@ export function TokenQuotaPanel({
   const [inputActive, setInputActive] = useState(false)
   // Active settings-dialog tab: quota limits vs. live-music vs. misc.
   const [settingsTab, setSettingsTab] = useState<'quota' | 'music' | 'other'>('quota')
+  // Drag-to-reorder state for the model rows: the key being dragged and
+  // the key currently hovered as the drop target.
+  const [dragKey, setDragKey] = useState<string | null>(null)
+  const [dropKey, setDropKey] = useState<string | null>(null)
   // Copy-button feedback: which command was just copied (label flips to
   // 「已复制」for a moment so the click is perceivable).
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
@@ -205,6 +211,7 @@ export function TokenQuotaPanel({
   const onFull = useStore(s => s.onFull)
   const checkUpdates = useStore(s => s.checkUpdates)
   const dimWhenIdle = useStore(s => s.dimWhenIdle)
+  const order = useStore(s => s.order)
   const musicEnabled = useStore(s => s.musicEnabled)
   const musicVolume = useStore(s => s.musicVolume)
   const musicStyle = useStore(s => s.musicStyle)
@@ -276,18 +283,27 @@ export function TokenQuotaPanel({
   }, [])
 
   const rows = useMemo(
-    () => mergeModelRows(groups, snapshot, current),
-    [groups, snapshot, current],
+    () => mergeModelRows(groups, snapshot, current, order),
+    [groups, snapshot, current, order],
   )
 
-  // All directory models, flattened for the monitoring picker.
-  const allModels = useMemo(
-    () => groups.flatMap(group => group.models.map((model: { id: string; name: string }) => ({
+  // All directory models, flattened for the monitoring picker — same drag
+  // order as the panel rows so both lists read identically.
+  const allModels = useMemo(() => {
+    const list = groups.flatMap(group => group.models.map((model: { id: string; name: string }) => ({
       key: `${group.id}/${model.id}`,
       name: model.name,
-    }))).sort((a, b) => a.key.localeCompare(b.key)),
-    [groups],
-  )
+    })))
+    const rank = new Map(order.map((key, index) => [key, index]))
+    return list.sort((left, right) => {
+      const leftRank = rank.get(left.key)
+      const rightRank = rank.get(right.key)
+      if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank
+      if (leftRank !== undefined) return -1
+      if (rightRank !== undefined) return 1
+      return left.key.localeCompare(right.key)
+    })
+  }, [groups, order])
 
   const isMonitoredKey = (key: string): boolean => monitored === null || monitored.includes(key)
 
@@ -498,8 +514,38 @@ export function TokenQuotaPanel({
               : css.fillIdle
           const editing = editingKey === row.key
           return (
-            <div key={row.key} className={css.row}>
+            <div
+              key={row.key}
+              className={`${css.row}${dragKey === row.key ? ` ${css.rowDragging}` : ''}${dropKey === row.key && dragKey !== row.key ? ` ${css.rowDropTarget}` : ''}`}
+              onDragOver={(event) => {
+                if (dragKey === null || dragKey === row.key) return
+                event.preventDefault()
+                setDropKey(row.key)
+              }}
+              onDrop={(event) => {
+                event.preventDefault()
+                if (dragKey !== null && dragKey !== row.key) {
+                  setModelOrder(reorderKeys(rows.map(r => r.key), dragKey, row.key))
+                }
+                setDragKey(null)
+                setDropKey(null)
+              }}
+              onDragEnd={() => { setDragKey(null); setDropKey(null) }}
+            >
               <div className={css.rowHeader}>
+                <span
+                  className={css.rowDrag}
+                  draggable
+                  title={t('reorderHint')}
+                  onDragStart={(event) => {
+                    setDragKey(row.key)
+                    event.dataTransfer.effectAllowed = 'move'
+                    // Firefox only starts a drag when some data is set.
+                    event.dataTransfer.setData('text/plain', row.key)
+                  }}
+                >
+                  ⠿
+                </span>
                 <span className={css.rowName} title={row.key}>
                   {row.name}
                   {row.current && <span className={css.currentBadge}>{t('current')}</span>}

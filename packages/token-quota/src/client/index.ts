@@ -338,6 +338,7 @@ export function apply(ctx: ClientContext): void {
     bound?.setSettings(lastMonitored, lastOnFull)
     bound?.setCheckUpdates(doc?.checkUpdates ?? true)
     bound?.setDimWhenIdle(doc?.dimWhenIdle ?? false)
+    bound?.setOrder(Array.isArray(doc?.order) ? doc.order : [])
     bound?.setReset(lastReset)
     const musicSettings = musicDefaults(doc?.music)
     lastOnlyCurrentSession = musicSettings.onlyCurrentSession
@@ -427,6 +428,12 @@ export function apply(ctx: ClientContext): void {
   const setDimWhenIdle = (enabled: boolean): void => {
     bound?.setDimWhenIdle(enabled)
     void scope.set('dimWhenIdle', enabled)
+  }
+
+  /** Persist the drag-to-reorder display order of model rows. */
+  const setModelOrder = (order: string[]): void => {
+    bound?.setOrder(order)
+    void scope.set('order', order)
   }
 
   const setMusicEnabled = (enabled: boolean): void => {
@@ -559,6 +566,7 @@ export function apply(ctx: ClientContext): void {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
       setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
+      setModelOrder,
     }
   }
 

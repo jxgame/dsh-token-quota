@@ -138,6 +138,12 @@ export interface TokenQuotaSettings {
    * an attached MIDI output. Off by default.
    */
   music: TokenQuotaMusicSettings
+  /**
+   * Preferred display order of model keys (`provider/model`), set by dragging
+   * rows in the panel. Keys not listed here keep their catalog order after the
+   * listed ones. Empty by default (pure catalog/alphabetical order).
+   */
+  order: string[]
 }
 
 /** Token-quota plugin configuration. */

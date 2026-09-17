@@ -233,6 +233,8 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   checkUpdates: z.boolean().default(true),
   // Client-side appearance preference; the host only stores it.
   dimWhenIdle: z.boolean().default(false),
+  // Drag-to-reorder: display order of model keys, written by the panel.
+  order: z.array(z.string()).default([]),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
@@ -323,7 +325,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC } })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [] })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -389,6 +391,7 @@ export class TokenQuotaService extends Service {
             onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
             checkUpdates: doc.checkUpdates ?? true,
             dimWhenIdle: doc.dimWhenIdle ?? false,
+            order: Array.isArray(doc.order) ? doc.order : [],
             reset: doc.reset ?? undefined,
             music: {
               enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,

@@ -118,10 +118,44 @@
   gap: 8px;
 }
 
+/* Drag-to-reorder: grip handle, the dragged row, and the drop target. */
+.rowDrag {
+  flex: none;
+  cursor: grab;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 3px;
+  margin-right: 2px;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.rowDrag:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.rowDrag:active {
+  cursor: grabbing;
+}
+
+.rowDragging {
+  opacity: 0.45;
+}
+
+.rowDropTarget {
+  box-shadow: inset 0 2px 0 var(--dsw-alias-brand-primary);
+}
+
 .rowName {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  /* Absorb the free space so the drag handle stays hard left and the meta
+   * column stays hard right (rowHeader is space-between). */
+  flex: 1;
+  min-width: 0;
   font-size: 12px;
   font-weight: 500;
   color: var(--dsw-alias-label-primary);

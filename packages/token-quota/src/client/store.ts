@@ -70,6 +70,11 @@ export interface TokenQuotaPanelState {
   checkUpdates: boolean
   /** Whether the panel dims while the pointer is away / while typing. */
   dimWhenIdle: boolean
+  /**
+   * Preferred display order of model keys, written by dragging panel rows.
+   * Keys not listed keep their catalog order after the listed ones.
+   */
+  order: string[]
   /** Live music settings (mirrored from the settings document). */
   musicEnabled: boolean
   musicVolume: number
@@ -118,6 +123,8 @@ export type TokenQuotaPanelActions = {
   setSettings: (d: TokenQuotaPanelState, monitored: string[] | null, onFull: TokenQuotaFullAction) => void
   setCheckUpdates: (d: TokenQuotaPanelState, checkUpdates: boolean) => void
   setDimWhenIdle: (d: TokenQuotaPanelState, dimWhenIdle: boolean) => void
+  /** Replace the drag-to-reorder model display order. */
+  setOrder: (d: TokenQuotaPanelState, order: string[]) => void
   setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
   setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
   setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
@@ -156,6 +163,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       onFull: 'stop',
       checkUpdates: true,
       dimWhenIdle: false,
+      order: [],
       musicEnabled: false,
       musicVolume: 0.5,
       musicStyle: 'pentatonic',
@@ -185,6 +193,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setSettings: (d, monitored, onFull) => { d.monitored = monitored; d.onFull = onFull },
       setCheckUpdates: (d, checkUpdates) => { d.checkUpdates = checkUpdates },
       setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
+      setOrder: (d, order) => { d.order = order },
       setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
       setMusicVolume: (d, volume) => { d.musicVolume = volume },
       setMusicStyle: (d, style) => { d.musicStyle = style },
@@ -233,12 +242,15 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
  * @param groups - advisory provider groups of the current session.
  * @param snapshot - latest quota snapshot, or null before the first one.
  * @param current - current model selection reported by the Host.
- * @returns rows sorted by key.
+ * @param order - user's drag-to-reorder preference (model keys); listed keys
+ * come first in that exact order, the rest follow in catalog order.
+ * @returns rows in display order.
  */
 export function mergeModelRows(
   groups: readonly ModelProviderGroup[],
   snapshot: TokenQuotaSnapshot | null,
   current: ModelSelection | null,
+  order: readonly string[] = [],
 ): ModelQuotaRow[] {
   const entryByKey = new Map<string, TokenQuotaEntry>((snapshot?.entries ?? []).map(entry => [entry.key, entry]))
   const rows = new Map<string, ModelQuotaRow>()
@@ -269,5 +281,30 @@ export function mergeModelRows(
       current: current !== null && current.provider === entry.provider && current.model === entry.model,
     })
   }
-  return [...rows.values()].sort((left, right) => left.key.localeCompare(right.key))
+  // Drag preference first (in its own order), everything else after it,
+  // alphabetically — so a newly discovered model still lands somewhere stable.
+  const rank = new Map(order.map((key, index) => [key, index]))
+  return [...rows.values()].sort((left, right) => {
+    const leftRank = rank.get(left.key)
+    const rightRank = rank.get(right.key)
+    if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank
+    if (leftRank !== undefined) return -1
+    if (rightRank !== undefined) return 1
+    return left.key.localeCompare(right.key)
+  })
+}
+
+/**
+ * Move one key to another key's position, returning the full reordered key
+ * list (the shape persisted in the settings document's `order`).
+ */
+export function reorderKeys(keys: readonly string[], from: string, to: string): string[] {
+  const next = [...keys]
+  const fromIndex = next.indexOf(from)
+  const toIndex = next.indexOf(to)
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return next
+  const [moved] = next.splice(fromIndex, 1)
+  if (moved === undefined) return next
+  next.splice(toIndex, 0, moved)
+  return next
 }
