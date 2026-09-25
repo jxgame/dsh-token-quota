@@ -244,6 +244,11 @@ export function TokenQuotaPanel({
   const [noteMenu, setNoteMenu] = useState<{ id: string, x: number, y: number } | null>(null)
   // Note window that was touched last, painted above its siblings.
   const [activeNote, setActiveNote] = useState<string | null>(null)
+  // Note whose title is being edited (id) plus the in-progress draft. The
+  // title is a plain label until the pencil is pressed, so the title bar
+  // stays fully draggable the rest of the time.
+  const [editingTitle, setEditingTitle] = useState<string | null>(null)
+  const [titleDraft, setTitleDraft] = useState('')
 
   useEffect(() => {
     if (!storedNotesLoaded || notesSeeded.current) return
@@ -308,6 +313,12 @@ export function TokenQuotaPanel({
     }])
   }
 
+  /** Commit the title draft and leave edit mode. */
+  const commitTitle = (id: string): void => {
+    patchNote(id, { title: titleDraft }, true)
+    setEditingTitle(null)
+  }
+
   const closeNote = (id: string): void => { patchNote(id, { visible: false }) }
   const removeNote = (id: string): void => {
     commitNotes(notes.filter(note => note.id !== id))
@@ -324,8 +335,8 @@ export function TokenQuotaPanel({
     const win = event.currentTarget.parentElement
     if (win === null) return
     if ((event.target as HTMLElement).closest('button') !== null) return
-    const input = (event.target as HTMLElement).closest('input')
-    if (input !== null && document.activeElement === input) return
+    // While the title is being edited the input keeps native text behaviour.
+    if ((event.target as HTMLElement).closest('input') !== null) return
     event.preventDefault()
     const startX = event.clientX
     const startY = event.clientY
@@ -347,9 +358,6 @@ export function TokenQuotaPanel({
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
-      if (dragging) return
-      const title = win.querySelector('input')
-      if (title instanceof HTMLInputElement) title.focus()
     }
     window.addEventListener('pointermove', onMove)
     window.addEventListener('pointerup', onUp)
@@ -1195,16 +1203,54 @@ export function TokenQuotaPanel({
           }}
           onPointerDown={() => { setActiveNote(note.id) }}
         >
-          <div className={css.noteWinBar} onPointerDown={(event) => { beginNoteBarDrag(event, note.id) }}>
+          <div
+            className={css.noteWinBar}
+            onPointerDown={(event) => { beginNoteBarDrag(event, note.id) }}
+            onDoubleClick={() => { patchNote(note.id, { collapsed: false }) }}
+          >
             <span className={css.noteWinGripBar} aria-hidden="true">⠿</span>
-            <input
-              className={css.noteWinTitle}
-              value={note.title}
-              placeholder={t('noteUntitled')}
-              title={t('noteRenameHint')}
-              onChange={(event) => { patchNote(note.id, { title: event.target.value }, false) }}
-              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
-            />
+            {editingTitle === note.id
+              ? (
+                <>
+                  <input
+                    className={css.noteWinTitle}
+                    value={titleDraft}
+                    autoFocus
+                    placeholder={t('noteUntitled')}
+                    onChange={(event) => { setTitleDraft(event.target.value) }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') commitTitle(note.id)
+                      if (event.key === 'Escape') setEditingTitle(null)
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className={css.noteWinBtn}
+                    title={t('noteConfirmTitle')}
+                    onClick={() => { commitTitle(note.id) }}
+                  >
+                    ✓
+                  </button>
+                </>
+              )
+              : (
+                <>
+                  <span
+                    className={css.noteWinTitleText}
+                    title={note.title.trim() === '' ? t('noteUntitled') : note.title}
+                  >
+                    {note.title.trim() === '' ? t('noteUntitled') : note.title}
+                  </span>
+                  <button
+                    type="button"
+                    className={css.noteWinBtn}
+                    title={t('noteEditTitle')}
+                    onClick={() => { setEditingTitle(note.id); setTitleDraft(note.title) }}
+                  >
+                    ✎
+                  </button>
+                </>
+              )}
             <button
               type="button"
               className={css.noteWinBtn}
@@ -1216,7 +1262,7 @@ export function TokenQuotaPanel({
             <button
               type="button"
               className={css.noteWinBtn}
-              title={t('noteCloseHint')}
+              title={t('noteClose')}
               onClick={() => { closeNote(note.id) }}
             >
               ×
