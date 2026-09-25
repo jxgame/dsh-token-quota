@@ -58,6 +58,7 @@ import {
   type TokenQuotaSnapshot,
   type TokenQuotaUpgrade,
   TOKEN_QUOTA_DEFAULT_MUSIC,
+  TOKEN_QUOTA_MAX_NOTES,
 } from './types.ts'
 import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
 
@@ -235,6 +236,18 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
   dimWhenIdle: z.boolean().default(false),
   // Drag-to-reorder: display order of model keys, written by the panel.
   order: z.array(z.string()).default([]),
+  // Floating scratchpad notes: the panel owns them, the host stores them.
+  notes: z.array(z.object({
+    id: z.string(),
+    title: z.string().default(''),
+    text: z.string().default(''),
+    x: z.number().default(80),
+    y: z.number().default(80),
+    width: z.number().default(220),
+    height: z.number().default(220),
+    collapsed: z.boolean().default(false),
+    visible: z.boolean().default(true),
+  })).default([]),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
@@ -325,7 +338,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [] })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [] })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -392,6 +405,22 @@ export class TokenQuotaService extends Service {
             checkUpdates: doc.checkUpdates ?? true,
             dimWhenIdle: doc.dimWhenIdle ?? false,
             order: Array.isArray(doc.order) ? doc.order : [],
+            notes: Array.isArray(doc.notes)
+              ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES).flatMap((note) => {
+                if (typeof note.id !== 'string') return []
+                return [{
+                  id: note.id,
+                  title: note.title ?? '',
+                  text: note.text ?? '',
+                  x: note.x ?? 80,
+                  y: note.y ?? 80,
+                  width: note.width ?? 220,
+                  height: note.height ?? 220,
+                  collapsed: note.collapsed ?? false,
+                  visible: note.visible ?? true,
+                }]
+              })
+              : [],
             reset: doc.reset ?? undefined,
             music: {
               enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,

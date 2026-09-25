@@ -82,6 +82,240 @@
   color: var(--dsw-alias-label-secondary);
 }
 
+/* Notes toolbar, sitting where the subtitle used to be: one chip per note
+ * (first character of its title) followed by the new-note button. Chips are
+ * appended to the left of the button, so the button drifts right as notes
+ * are created. */
+.notesBar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.noteChip {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.noteChip:hover {
+  color: var(--dsw-alias-label-primary);
+  border-color: var(--dsw-alias-border-l2);
+}
+
+.noteChipOpen {
+  color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.noteNew {
+  position: relative;
+  flex: none;
+  width: 22px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: 1px dashed var(--dsw-alias-border-l2);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 0.12s ease, border-color 0.12s ease;
+}
+
+.noteNew:hover:not(:disabled) {
+  color: var(--dsw-alias-brand-primary);
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.noteNew:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.noteNewPlus {
+  position: absolute;
+  right: -1px;
+  bottom: -2px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  color: inherit;
+}
+
+/* Floating note windows: viewport-fixed like the dialogs, so the panel's
+ * overflow never clips them. */
+.noteWin {
+  position: fixed;
+  z-index: 60;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.noteWinCollapsed {
+  height: auto !important;
+}
+
+.noteWinBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--dsw-alias-bg-layer-1);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  cursor: grab;
+  user-select: none;
+}
+
+.noteWinBar:active {
+  cursor: grabbing;
+}
+
+.noteWinGripBar {
+  flex: none;
+  font-size: 10px;
+  color: var(--dsw-alias-label-secondary);
+  opacity: 0.7;
+}
+
+.noteWinTitle {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  outline: none;
+}
+
+.noteWinTitle:hover {
+  border-color: var(--dsw-alias-border-l1);
+}
+
+.noteWinTitle:focus {
+  background: var(--dsw-alias-bg-overlay);
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.noteWinBtn {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.noteWinBtn:hover {
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-layer-2);
+}
+
+.noteWinText {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+.noteWinResize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  background: linear-gradient(
+    135deg,
+    transparent 0 45%,
+    var(--dsw-alias-border-l2) 45% 55%,
+    transparent 55% 70%,
+    var(--dsw-alias-border-l2) 70% 80%,
+    transparent 80%
+  );
+}
+
+/* Right-click menu of a note chip. */
+.noteMenuBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  pointer-events: auto;
+}
+
+.noteMenu {
+  position: fixed;
+  z-index: 101;
+  pointer-events: auto;
+  min-width: 96px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  background: var(--dsw-alias-bg-overlay);
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+}
+
+.noteMenuItem {
+  padding: 5px 8px;
+  font-size: 11px;
+  text-align: left;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.noteMenuItem:hover {
+  background: var(--dsw-alias-bg-layer-2);
+}
+
 .collapse {
   flex: none;
   border: none;
@@ -566,6 +800,9 @@
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 100;
+  /* Floating layers are siblings of the panel (so the panel's dim-when-idle
+   * opacity never fades them) and the overlay seat is pointer-events: none. */
+  pointer-events: auto;
   width: 430px;
   max-width: 94vw;
   max-height: 80vh;
@@ -953,6 +1190,7 @@
   position: fixed;
   inset: 0;
   z-index: 100001;
+  pointer-events: auto;
   display: flex;
   align-items: center;
   justify-content: center;

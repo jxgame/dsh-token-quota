@@ -24,8 +24,10 @@ import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
   TokenQuotaMusicStyle,
+  TokenQuotaNote,
   TokenQuotaReset,
 } from '@jxgame2020/dsh-token-quota/types'
+import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
 import { mergeModelRows, reorderKeys } from './store.ts'
 import type { TokenQuotaKey } from './locales.ts'
@@ -56,6 +58,8 @@ export interface TokenQuotaPanelInjected {
   setDimWhenIdle: (enabled: boolean) => void
   /** Persist the drag-to-reorder display order of model rows. */
   setModelOrder: (order: string[]) => void
+  /** Persist the floating scratchpad notes (content, title, placement). */
+  saveNotes: (notes: TokenQuotaNote[]) => void
   /** Toggle the live music output (requires a user gesture to start audio). */
   setMusicEnabled: (enabled: boolean) => void
   /** Change the live-music master volume 0..1. */
@@ -136,6 +140,51 @@ function beginDrag(
   window.addEventListener('pointercancel', onUp)
 }
 
+/**
+ * Pointer-driven resize of a note window from its bottom-right grip. Sizes are
+ * absolute pixels derived from the element's rect at grab time, so the window
+ * keeps its top-left anchor while the pointer moves. A floor keeps a window
+ * from collapsing to nothing.
+ */
+function beginResize(
+  event: ReactPointerEvent,
+  el: HTMLElement | null,
+  apply: (size: { width: number; height: number }) => void,
+): void {
+  if (el === null) return
+  event.preventDefault()
+  event.stopPropagation()
+  const startX = event.clientX
+  const startY = event.clientY
+  const rect = el.getBoundingClientRect()
+  const onMove = (ev: PointerEvent): void => {
+    apply({
+      width: Math.max(NOTE_MIN_WIDTH, Math.round(rect.width + (ev.clientX - startX))),
+      height: Math.max(NOTE_MIN_HEIGHT, Math.round(rect.height + (ev.clientY - startY))),
+    })
+  }
+  const onUp = (): void => {
+    window.removeEventListener('pointermove', onMove)
+    window.removeEventListener('pointerup', onUp)
+    window.removeEventListener('pointercancel', onUp)
+  }
+  window.addEventListener('pointermove', onMove)
+  window.addEventListener('pointerup', onUp)
+  window.addEventListener('pointercancel', onUp)
+}
+
+/** First visible character of a note title, for its header chip. */
+function noteInitial(title: string): string {
+  const trimmed = title.trim()
+  if (trimmed === '') return '·'
+  return Array.from(trimmed)[0] ?? '·'
+}
+
+/** Default geometry of a new note; later notes cascade so they don't stack. */
+const NOTE_DEFAULT_SIZE = 220
+const NOTE_MIN_WIDTH = 150
+const NOTE_MIN_HEIGHT = 70
+
 /** Persisted panel placement so a dragged position survives reloads. */
 const PANEL_POS_KEY = 'dsh-token-quota:panel-pos'
 
@@ -160,7 +209,7 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder, saveNotes,
   setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
@@ -178,6 +227,134 @@ export function TokenQuotaPanel({
   // the key currently hovered as the drop target.
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dropKey, setDropKey] = useState<string | null>(null)
+
+  // ---- Floating scratchpad notes -------------------------------------------
+  // The notes live in local state while the panel is mounted: every keystroke
+  // updates this copy (so typing is never laggy) and a debounced write pushes
+  // it to the Host. Seeding happens exactly once, when the Host's document
+  // first arrives, so a background settings poll cannot clobber the text.
+  const storedNotes = useStore(s => s.notes)
+  const storedNotesLoaded = useStore(s => s.notesLoaded)
+  const [notes, setNotes] = useState<TokenQuotaNote[]>([])
+  const notesSeeded = useRef(false)
+  const notesTimer = useRef<number | null>(null)
+  // Latest value awaiting a debounced write, so an unmount can flush it.
+  const notesPending = useRef<TokenQuotaNote[] | null>(null)
+  // Context menu opened by right-clicking a note chip.
+  const [noteMenu, setNoteMenu] = useState<{ id: string, x: number, y: number } | null>(null)
+  // Note window that was touched last, painted above its siblings.
+  const [activeNote, setActiveNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!storedNotesLoaded || notesSeeded.current) return
+    notesSeeded.current = true
+    setNotes(storedNotes)
+  }, [storedNotesLoaded, storedNotes])
+
+  // Flush a pending debounced write when the panel goes away, so keystrokes
+  // typed in the last fraction of a second are not lost.
+  useEffect(() => () => {
+    if (notesTimer.current !== null) window.clearTimeout(notesTimer.current)
+    const pending = notesPending.current
+    if (pending !== null) {
+      notesPending.current = null
+      saveNotes(pending)
+    }
+  }, [])
+
+  /**
+   * Apply a note change locally and persist it. Structural changes (create,
+   * close, collapse, drop) write straight through; free-form edits (typing,
+   * dragging, resizing) are debounced so a keystroke doesn't hit the Host.
+   */
+  const commitNotes = (next: TokenQuotaNote[], immediate = true): void => {
+    setNotes(next)
+    if (notesTimer.current !== null) window.clearTimeout(notesTimer.current)
+    if (immediate) {
+      notesPending.current = null
+      saveNotes(next)
+      return
+    }
+    notesPending.current = next
+    notesTimer.current = window.setTimeout(() => {
+      notesTimer.current = null
+      const pending = notesPending.current
+      notesPending.current = null
+      if (pending !== null) saveNotes(pending)
+    }, 400)
+  }
+
+  const patchNote = (id: string, patch: Partial<TokenQuotaNote>, immediate = true): void => {
+    commitNotes(notes.map(note => (note.id === id ? { ...note, ...patch } : note)), immediate)
+  }
+
+  /** Create a note, auto-titled 新建N with the lowest unused number. */
+  const createNote = (): void => {
+    if (notes.length >= TOKEN_QUOTA_MAX_NOTES) return
+    let index = 1
+    const used = new Set(notes.map(note => /^新建(\d+)$/.exec(note.title.trim())?.[1]).filter(Boolean))
+    while (used.has(String(index))) index += 1
+    const step = notes.length * 28
+    commitNotes([...notes, {
+      id: `note-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      title: `新建${index}`,
+      text: '',
+      x: 120 + step,
+      y: 140 + step,
+      width: NOTE_DEFAULT_SIZE,
+      height: NOTE_DEFAULT_SIZE,
+      collapsed: false,
+      visible: true,
+    }])
+  }
+
+  const closeNote = (id: string): void => { patchNote(id, { visible: false }) }
+  const removeNote = (id: string): void => {
+    commitNotes(notes.filter(note => note.id !== id))
+    setNoteMenu(null)
+  }
+
+  /**
+   * Title-bar drag with a click/drag threshold: moving the pointer past a few
+   * pixels drags the window, while a plain click focuses the title input for
+   * editing. A title that is already being edited keeps native text behaviour
+   * (selection, caret placement) instead of turning into a window drag.
+   */
+  const beginNoteBarDrag = (event: ReactPointerEvent<HTMLDivElement>, id: string): void => {
+    const win = event.currentTarget.parentElement
+    if (win === null) return
+    if ((event.target as HTMLElement).closest('button') !== null) return
+    const input = (event.target as HTMLElement).closest('input')
+    if (input !== null && document.activeElement === input) return
+    event.preventDefault()
+    const startX = event.clientX
+    const startY = event.clientY
+    const rect = win.getBoundingClientRect()
+    let dragging = false
+    const onMove = (ev: PointerEvent): void => {
+      if (!dragging) {
+        if (Math.abs(ev.clientX - startX) < 3 && Math.abs(ev.clientY - startY) < 3) return
+        dragging = true
+        const active = document.activeElement
+        if (active instanceof HTMLElement) active.blur()
+      }
+      patchNote(id, {
+        x: Math.round(rect.left + (ev.clientX - startX)),
+        y: Math.round(rect.top + (ev.clientY - startY)),
+      }, false)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+      if (dragging) return
+      const title = win.querySelector('input')
+      if (title instanceof HTMLInputElement) title.focus()
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+  }
   // Copy-button feedback: which command was just copied (label flips to
   // 「已复制」for a moment so the click is perceivable).
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null)
@@ -416,6 +593,7 @@ export function TokenQuotaPanel({
     : ''
 
   return (
+    <>
     <div
       ref={panelRef}
       className={`${css.panel}${panelDimClass !== '' ? ` ${panelDimClass}` : ''}`}
@@ -442,7 +620,45 @@ export function TokenQuotaPanel({
                 )
             )}
           </div>
-          <div className={css.subtitle}>{t('subtitle')}</div>
+          <div className={css.notesBar} onPointerDown={(event) => { event.stopPropagation() }}>
+            {notes.map((note) => {
+              const open = note.visible && !note.collapsed
+              return (
+                <button
+                  key={note.id}
+                  type="button"
+                  className={`${css.noteChip}${open ? ` ${css.noteChipOpen}` : ''}`}
+                  title={note.title.trim() === '' ? t('noteUntitled') : note.title}
+                  onClick={() => { patchNote(note.id, { visible: true, collapsed: false }) }}
+                  onContextMenu={(event) => {
+                    event.preventDefault()
+                    setNoteMenu({ id: note.id, x: event.clientX, y: event.clientY })
+                  }}
+                >
+                  {noteInitial(note.title)}
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              className={css.noteNew}
+              disabled={notes.length >= TOKEN_QUOTA_MAX_NOTES}
+              title={notes.length >= TOKEN_QUOTA_MAX_NOTES ? t('noteMaxHint') : t('noteNewHint')}
+              onClick={createNote}
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <path
+                  d="M4 1.6h4.6L12.4 5.4v9H4z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  strokeLinejoin="round"
+                />
+                <path d="M8.4 1.6v3.9h4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+              </svg>
+              <span className={css.noteNewPlus}>+</span>
+            </button>
+          </div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
           <button
@@ -597,6 +813,7 @@ export function TokenQuotaPanel({
           )
         })}
       </div>
+    </div>
       {dialogOpen && (
         <div
           ref={settingsRef}
@@ -965,6 +1182,91 @@ export function TokenQuotaPanel({
           </div>
         </div>
       )}
-    </div>
+      {notes.filter(note => note.visible).map((note) => (
+        <div
+          key={note.id}
+          className={`${css.noteWin}${note.collapsed ? ` ${css.noteWinCollapsed}` : ''}`}
+          style={{
+            left: `${note.x}px`,
+            top: `${note.y}px`,
+            width: `${note.width}px`,
+            zIndex: activeNote === note.id ? 62 : 60,
+            ...(note.collapsed ? {} : { height: `${note.height}px` }),
+          }}
+          onPointerDown={() => { setActiveNote(note.id) }}
+        >
+          <div className={css.noteWinBar} onPointerDown={(event) => { beginNoteBarDrag(event, note.id) }}>
+            <span className={css.noteWinGripBar} aria-hidden="true">⠿</span>
+            <input
+              className={css.noteWinTitle}
+              value={note.title}
+              placeholder={t('noteUntitled')}
+              title={t('noteRenameHint')}
+              onChange={(event) => { patchNote(note.id, { title: event.target.value }, false) }}
+              onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur() }}
+            />
+            <button
+              type="button"
+              className={css.noteWinBtn}
+              title={note.collapsed ? t('noteExpand') : t('noteCollapse')}
+              onClick={() => { patchNote(note.id, { collapsed: !note.collapsed }) }}
+            >
+              {note.collapsed ? '▸' : '▾'}
+            </button>
+            <button
+              type="button"
+              className={css.noteWinBtn}
+              title={t('noteCloseHint')}
+              onClick={() => { closeNote(note.id) }}
+            >
+              ×
+            </button>
+          </div>
+          {!note.collapsed && (
+            <>
+              <textarea
+                className={css.noteWinText}
+                value={note.text}
+                placeholder={t('notePlaceholder')}
+                spellCheck={false}
+                onChange={(event) => { patchNote(note.id, { text: event.target.value }, false) }}
+              />
+              <span
+                className={css.noteWinResize}
+                title={t('noteResizeHint')}
+                onPointerDown={(event) => {
+                  beginResize(event, event.currentTarget.parentElement, size => { patchNote(note.id, size, false) })
+                }}
+              />
+            </>
+          )}
+        </div>
+      ))}
+      {noteMenu !== null && (
+        <>
+          <div
+            className={css.noteMenuBackdrop}
+            onPointerDown={() => { setNoteMenu(null) }}
+            onContextMenu={(event) => { event.preventDefault(); setNoteMenu(null) }}
+          />
+          <div className={css.noteMenu} style={{ left: `${noteMenu.x}px`, top: `${noteMenu.y}px` }}>
+            <button
+              type="button"
+              className={css.noteMenuItem}
+              onClick={() => { closeNote(noteMenu.id); setNoteMenu(null) }}
+            >
+              {t('noteClose')}
+            </button>
+            <button
+              type="button"
+              className={css.noteMenuItem}
+              onClick={() => { removeNote(noteMenu.id) }}
+            >
+              {t('noteDelete')}
+            </button>
+          </div>
+        </>
+      )}
+    </>
   )
 }

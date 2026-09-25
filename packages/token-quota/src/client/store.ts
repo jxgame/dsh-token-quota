@@ -15,6 +15,7 @@ import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
   TokenQuotaMusicStyle,
+  TokenQuotaNote,
   TokenQuotaReset,
   TokenQuotaSnapshot,
   TokenQuotaEntry,
@@ -75,6 +76,14 @@ export interface TokenQuotaPanelState {
    * Keys not listed keep their catalog order after the listed ones.
    */
   order: string[]
+  /** Floating scratchpad notes as persisted by the Host. */
+  notes: TokenQuotaNote[]
+  /**
+   * Whether the notes above have been read from the Host at least once. The
+   * panel seeds its local editing copy exactly once, on this flip, so a
+   * background poll can never clobber what the user is typing.
+   */
+  notesLoaded: boolean
   /** Live music settings (mirrored from the settings document). */
   musicEnabled: boolean
   musicVolume: number
@@ -125,6 +134,8 @@ export type TokenQuotaPanelActions = {
   setDimWhenIdle: (d: TokenQuotaPanelState, dimWhenIdle: boolean) => void
   /** Replace the drag-to-reorder model display order. */
   setOrder: (d: TokenQuotaPanelState, order: string[]) => void
+  /** Adopt the Host's persisted notes and mark them as loaded. */
+  setNotes: (d: TokenQuotaPanelState, notes: TokenQuotaNote[]) => void
   setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
   setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
   setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
@@ -164,6 +175,8 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       checkUpdates: true,
       dimWhenIdle: false,
       order: [],
+      notes: [],
+      notesLoaded: false,
       musicEnabled: false,
       musicVolume: 0.5,
       musicStyle: 'pentatonic',
@@ -194,6 +207,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setCheckUpdates: (d, checkUpdates) => { d.checkUpdates = checkUpdates },
       setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
       setOrder: (d, order) => { d.order = order },
+      setNotes: (d, notes) => { d.notes = notes; d.notesLoaded = true },
       setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
       setMusicVolume: (d, volume) => { d.musicVolume = volume },
       setMusicStyle: (d, style) => { d.musicStyle = style },

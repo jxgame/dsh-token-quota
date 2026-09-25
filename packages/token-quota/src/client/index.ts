@@ -39,10 +39,12 @@ import type {
   TokenQuotaMusicAction,
   TokenQuotaMusicSettings,
   TokenQuotaMusicStyle,
+  TokenQuotaNote,
   TokenQuotaReset,
   TokenQuotaSettings,
   TokenQuotaSnapshot,
 } from '@jxgame2020/dsh-token-quota/types'
+import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import { createTokenQuotaPanelStore } from './store.ts'
 import type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
 import { TokenQuotaPanel } from './TokenQuotaPanel.tsx'
@@ -166,6 +168,29 @@ export function apply(ctx: ClientContext): void {
     window.removeEventListener('pointerdown', autoStartMusic)
     window.removeEventListener('keydown', autoStartMusic)
   }, 'token-quota-ui: music autostart gestures')
+
+  /**
+   * Coerce the persisted note array into complete notes: older documents may
+   * lack fields added later, and a hand-edited file may hold junk. The cap is
+   * enforced here too so a tampered document cannot grow past it.
+   */
+  const normalizeNotes = (raw: TokenQuotaNote[] | undefined): TokenQuotaNote[] => {
+    if (!Array.isArray(raw)) return []
+    return raw.slice(0, TOKEN_QUOTA_MAX_NOTES).flatMap((note) => {
+      if (typeof note !== 'object' || note === null || typeof note.id !== 'string') return []
+      return [{
+        id: note.id,
+        title: typeof note.title === 'string' ? note.title : '',
+        text: typeof note.text === 'string' ? note.text : '',
+        x: typeof note.x === 'number' ? note.x : 80,
+        y: typeof note.y === 'number' ? note.y : 80,
+        width: typeof note.width === 'number' ? note.width : 220,
+        height: typeof note.height === 'number' ? note.height : 220,
+        collapsed: note.collapsed === true,
+        visible: note.visible !== false,
+      }]
+    })
+  }
 
   /** Build a writable music-settings clone with defaults applied. */
   const musicDefaults = (raw: TokenQuotaSettings['music'] | undefined): TokenQuotaMusicSettings => ({
@@ -339,6 +364,7 @@ export function apply(ctx: ClientContext): void {
     bound?.setCheckUpdates(doc?.checkUpdates ?? true)
     bound?.setDimWhenIdle(doc?.dimWhenIdle ?? false)
     bound?.setOrder(Array.isArray(doc?.order) ? doc.order : [])
+    bound?.setNotes(normalizeNotes(doc?.notes))
     bound?.setReset(lastReset)
     const musicSettings = musicDefaults(doc?.music)
     lastOnlyCurrentSession = musicSettings.onlyCurrentSession
@@ -434,6 +460,11 @@ export function apply(ctx: ClientContext): void {
   const setModelOrder = (order: string[]): void => {
     bound?.setOrder(order)
     void scope.set('order', order)
+  }
+
+  /** Persist the floating scratchpad notes (content, title, placement). */
+  const saveNotes = (notes: TokenQuotaNote[]): void => {
+    void scope.set('notes', notes.slice(0, TOKEN_QUOTA_MAX_NOTES))
   }
 
   const setMusicEnabled = (enabled: boolean): void => {
@@ -566,7 +597,7 @@ export function apply(ctx: ClientContext): void {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
       setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
-      setModelOrder,
+      setModelOrder, saveNotes,
     }
   }
 
