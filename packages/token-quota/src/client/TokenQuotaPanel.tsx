@@ -1206,7 +1206,13 @@ export function TokenQuotaPanel({
           <div
             className={css.noteWinBar}
             onPointerDown={(event) => { beginNoteBarDrag(event, note.id) }}
-            onDoubleClick={() => { patchNote(note.id, { collapsed: false }) }}
+            onDoubleClick={(event) => {
+              // Toggle: collapsed strips expand, open windows fold away. The
+              // title input (word selection) and the bar buttons handle their
+              // own double-clicks, so they are left alone.
+              if ((event.target as HTMLElement).closest('button, input') !== null) return
+              patchNote(note.id, { collapsed: !note.collapsed })
+            }}
           >
             <span className={css.noteWinGripBar} aria-hidden="true">⠿</span>
             {editingTitle === note.id
