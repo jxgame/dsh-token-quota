@@ -21,13 +21,14 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type {
+  TokenQuotaBalance,
   TokenQuotaFullAction,
   TokenQuotaLog,
   TokenQuotaMusicStyle,
   TokenQuotaNote,
   TokenQuotaReset,
 } from '@jxgame2020/dsh-token-quota/types'
-import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
+import { TOKEN_QUOTA_BALANCE_PROVIDERS, TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
 import { mergeModelRows, reorderKeys } from './store.ts'
 import type { TokenQuotaKey } from './locales.ts'
@@ -62,8 +63,8 @@ export interface TokenQuotaPanelInjected {
   saveNotes: (notes: TokenQuotaNote[]) => void
   /** Persist the account-balance display settings. */
   setBalanceSettings: (enabled: boolean, pollMinutes: number) => void
-  /** Ask the Host to refresh the account balance now. */
-  refreshBalance: () => void
+  /** Ask the Host to refresh account balances (one provider, or all). */
+  refreshBalance: (provider?: string) => void
   /** Toggle the live music output (requires a user gesture to start audio). */
   setMusicEnabled: (enabled: boolean) => void
   /** Change the live-music master volume 0..1. */
@@ -193,6 +194,17 @@ function currencySymbol(currency: string): string {
   return `${currency} `
 }
 
+/** Short "Last: MM-dd HH:mm:ss" timestamp for the balance window footer. */
+function formatBalanceTime(epochMs: number): string {
+  const d = new Date(epochMs)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mi = String(d.getMinutes()).padStart(2, '0')
+  const ss = String(d.getSeconds()).padStart(2, '0')
+  return `${mm}-${dd} ${hh}:${mi}:${ss}`
+}
+
 /** Default geometry of a new note; later notes cascade so they don't stack. */
 const NOTE_DEFAULT_SIZE = 220
 const NOTE_MIN_WIDTH = 150
@@ -257,8 +269,12 @@ export function TokenQuotaPanel({
   const [noteMenu, setNoteMenu] = useState<{ id: string, x: number, y: number } | null>(null)
   // Note window that was touched last, painted above its siblings.
   const [activeNote, setActiveNote] = useState<string | null>(null)
-  // Brief spin state while a manual balance refresh is in flight.
-  const [refreshingBalance, setRefreshingBalance] = useState(false)
+  // Balance window: docked to the panel's left edge when open.
+  const [balanceOpen, setBalanceOpen] = useState(false)
+  const [balancePos, setBalancePos] = useState<{ x: number, y: number } | null>(null)
+  const [balanceSort, setBalanceSort] = useState<{ key: 'provider' | 'total', dir: 1 | -1 } | null>(null)
+  const [refreshingAll, setRefreshingAll] = useState(false)
+  const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null)
   // Note whose title is being edited (id) plus the in-progress draft. The
   // title is a plain label until the pencil is pressed, so the title bar
   // stays fully draggable the rest of the time.
@@ -412,7 +428,7 @@ export function TokenQuotaPanel({
   const checkUpdates = useStore(s => s.checkUpdates)
   const dimWhenIdle = useStore(s => s.dimWhenIdle)
   const order = useStore(s => s.order)
-  const balance = useStore(s => s.balance)
+  const balances = useStore(s => s.balances)
   const balanceEnabled = useStore(s => s.balanceEnabled)
   const balancePollMinutes = useStore(s => s.balancePollMinutes)
   const musicEnabled = useStore(s => s.musicEnabled)
@@ -611,29 +627,133 @@ export function TokenQuotaPanel({
   }
 
   const visibleRows = rows.filter(row => isMonitoredKey(row.key) || row.current)
+
+  // Distinct providers from the current session's model directory — the rows
+  // the balance window lists.
+  const providers = useMemo(() => {
+    const seen = new Set<string>()
+    const list: string[] = []
+    for (const group of groups) if (!seen.has(group.id)) { seen.add(group.id); list.push(group.id) }
+    if (list.length === 0) list.push('deepseek')
+    return list
+  }, [groups])
+
+  // Balance by provider key, built from the snapshot (status ok/error/unconfigured)
+  // plus a client-side "unsupported" sentinel for providers the Host does not
+  // yet know how to query, and "loading" for supported ones not yet returned.
+  const balanceByProvider = useMemo(() => {
+    const map = new Map<string, TokenQuotaBalance | 'unsupported' | 'loading'>()
+    for (const provider of providers) {
+      const bal = balances.find(b => b.provider === provider)
+      if (bal !== undefined) {
+        map.set(provider, bal)
+      } else if (TOKEN_QUOTA_BALANCE_PROVIDERS.includes(provider)) {
+        map.set(provider, 'loading')
+      } else {
+        map.set(provider, 'unsupported')
+      }
+    }
+    return map
+  }, [providers, balances])
+
+  // Sorted list honoring the current header sort click. Errors / unsupported /
+  // unconfigured cluster at the bottom regardless of sort.
+  const sortedProviders = useMemo(() => {
+    const toNum = (entry: TokenQuotaBalance | 'unsupported' | 'loading'): number => {
+      if (typeof entry === 'string') return -1
+      if (entry.status === 'ok') return entry.total
+      return -1
+    }
+    const statusOrder = (entry: TokenQuotaBalance | 'unsupported' | 'loading'): number => {
+      if (entry === 'loading') return 0
+      if (entry === 'unsupported') return 3
+      if (entry.status === 'ok' && entry.isAvailable && entry.total >= 5) return 0
+      if (entry.status === 'ok' && entry.total < 5) return 1
+      if (entry.status === 'unconfigured') return 3
+      if (entry.status === 'error') return 2
+      return 0
+    }
+    return [...providers].sort((left, right) => {
+      const lEntry = balanceByProvider.get(left)
+      const rEntry = balanceByProvider.get(right)
+      if (lEntry === undefined || rEntry === undefined) return 0
+      const ls = statusOrder(lEntry), rs = statusOrder(rEntry)
+      if (ls !== rs) return ls - rs
+      if (balanceSort === null) return left.localeCompare(right)
+      if (balanceSort.key === 'provider') {
+        return left.localeCompare(right) * balanceSort.dir
+      }
+      return (toNum(lEntry) - toNum(rEntry)) * balanceSort.dir
+    })
+  }, [providers, balanceByProvider, balanceSort])
+
+  /** Most recent successful fetch time (epoch ms), for the "Last: ..." line. */
+  const lastFetchedAt = useMemo(() => {
+    let latest = 0
+    for (const bal of balances) if (bal.status === 'ok') latest = Math.max(latest, bal.fetchedAt)
+    return latest
+  }, [balances])
+
+  /** Format a balance value for display, or a state label. */
+  const renderProviderCell = (provider: string): { text: string; cls?: string; title?: string } => {
+    const entry = balanceByProvider.get(provider)
+    if (entry === undefined) return { text: '' }
+    if (entry === 'loading') {
+      return { text: t('balanceLoading'), cls: css.balanceStateHint as string }
+    }
+    if (entry === 'unsupported') {
+      return { text: t('balanceUnsupported'), cls: css.balanceStateHint as string }
+    }
+    switch (entry.status) {
+      case 'unconfigured': {
+        return {
+          text: t('balanceUnconfiguredShort'),
+          cls: css.balanceStateHint as string,
+          title: t('balanceUnconfiguredHint'),
+        }
+      }
+      case 'error': {
+        if (entry.total > 0) {
+          return entry.error !== undefined
+            ? {
+                text: `${currencySymbol(entry.currency)}${entry.total.toFixed(2)}`,
+                cls: css.balanceValueError as string,
+                title: entry.error,
+              }
+            : {
+                text: `${currencySymbol(entry.currency)}${entry.total.toFixed(2)}`,
+                cls: css.balanceValueError as string,
+              }
+        }
+        return entry.error !== undefined
+          ? { text: t('balanceError'), cls: css.balanceStateError as string, title: entry.error }
+          : { text: t('balanceError'), cls: css.balanceStateError as string }
+      }
+      case 'ok': {
+        if (entry.isAvailable) {
+          return entry.total < 5
+            ? { text: `${currencySymbol(entry.currency)}${entry.total.toFixed(2)}`, cls: css.balanceValueLow as string }
+            : { text: `${currencySymbol(entry.currency)}${entry.total.toFixed(2)}`, cls: css.balanceValueOk as string }
+        }
+        return {
+          text: `${currencySymbol(entry.currency)}${entry.total.toFixed(2)}`,
+          cls: css.balanceValueError as string,
+          title: t('balanceUnavailable'),
+        }
+      }
+    }
+  }
+
+  const lastLabel = lastFetchedAt > 0
+    ? t('balanceLastUpdated').replace('{v}', formatBalanceTime(lastFetchedAt))
+    : ''
+
   // The panel dims when the pointer is away ONLY when the user opted in
   // (settings → 失焦窗口透明). While the upgrade banner flashes, the panel
   // is forced opaque regardless.
   const panelDimClass = dimWhenIdle
     ? (hovered || upgradeFlash ? '' : inputActive ? css.panelDimStrong : css.panelDim)
     : ''
-
-  /** Tooltip for the balance bar: fetch time, breakdown, or failure detail. */
-  const balanceTitle = balance === undefined
-    ? ''
-    : balance.status === 'unconfigured'
-      ? t('balanceUnconfiguredHint')
-      : balance.error !== undefined
-        ? `${t('balanceUpdatedAt').replace('{v}', new Date(balance.fetchedAt).toLocaleTimeString())} — ${balance.error}`
-        : [
-            t('balanceUpdatedAt').replace('{v}', new Date(balance.fetchedAt).toLocaleTimeString()),
-            balance.granted !== undefined
-              ? t('balanceGranted').replace('{v}', `${currencySymbol(balance.currency)}${balance.granted.toFixed(2)}`)
-              : null,
-            balance.toppedUp !== undefined
-              ? t('balanceToppedUp').replace('{v}', `${currencySymbol(balance.currency)}${balance.toppedUp.toFixed(2)}`)
-              : null,
-          ].filter((item): item is string => item !== null).join(' · ')
 
   return (
     <>
@@ -701,6 +821,33 @@ export function TokenQuotaPanel({
               </svg>
               <span className={css.noteNewPlus}>+</span>
             </button>
+            {balanceEnabled && (
+              <button
+                type="button"
+                className={`${css.noteNew} ${css.balanceToggle}${balanceOpen ? ` ${css.balanceToggleOpen}` : ''}`}
+                title={t('balanceTitle')}
+                onClick={() => {
+                  if (balanceOpen) { setBalanceOpen(false); return }
+                  const winW = 280
+                  const rect = panelRef.current?.getBoundingClientRect()
+                  if (rect !== undefined) {
+                    setBalancePos({
+                      x: Math.max(8, rect.left - winW - 8),
+                      y: rect.top,
+                    })
+                  } else {
+                    setBalancePos({ x: Math.max(8, (typeof window !== 'undefined' ? window.innerWidth : 800) - 12 - 320 - winW - 8), y: 56 })
+                  }
+                  setBalanceOpen(true)
+                }}
+                aria-pressed={balanceOpen}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                  <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor">¥</text>
+                </svg>
+              </button>
+            )}
           </div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
@@ -725,40 +872,6 @@ export function TokenQuotaPanel({
         </div>
       </div>
       <div className={css.body}>
-        {balance !== undefined && balanceEnabled && (
-          <div className={`${css.balanceBar}${balance.status === 'error' || (balance.status === 'ok' && !balance.isAvailable) ? ` ${css.balanceBarError}` : ''}${balance.status === 'unconfigured' ? ` ${css.balanceBarDim}` : ''}${balance.status === 'ok' && balance.isAvailable && balance.total < 5 ? ` ${css.balanceBarLow}` : ''}`}>
-            <span className={css.balanceBarText} title={balanceTitle}>
-              {balance.status === 'unconfigured'
-                ? `⚠ ${t('balanceUnconfigured')}`
-                : balance.status === 'error' && balance.total === 0
-                  ? `⚠ ${t('balanceError')}`
-                  : (
-                    <>
-                      {t('balanceLabel')} {currencySymbol(balance.currency)}{balance.total.toFixed(2)}
-                      {balance.status === 'error' && (
-                        <span className={css.balanceBarBadge}>{t('balanceError')}</span>
-                      )}
-                      {balance.status === 'ok' && !balance.isAvailable && (
-                        <span className={css.balanceBarBadge}>{t('balanceUnavailable')}</span>
-                      )}
-                    </>
-                  )}
-            </span>
-            <button
-              type="button"
-              className={css.balanceBarRefresh}
-              title={t('balanceRefresh')}
-              disabled={balance.status === 'unconfigured' || refreshingBalance}
-              onClick={() => {
-                setRefreshingBalance(true)
-                refreshBalance()
-                window.setTimeout(() => { setRefreshingBalance(false) }, 1500)
-              }}
-            >
-              {refreshingBalance ? '…' : '↻'}
-            </button>
-          </div>
-        )}
         {loading && <div className={css.notice}>{t('loading')}</div>}
         {error !== null && <div className={css.noticeError}>{error}</div>}
         {fullNotice !== null && (
@@ -1161,6 +1274,103 @@ export function TokenQuotaPanel({
             </>
             )}
           </div>
+      )}
+      {balanceOpen && balancePos !== null && (
+        <div className={css.balanceWin} style={{ left: balancePos.x, top: balancePos.y }}>
+          <div className={css.balanceWinHeader}>
+            <div className={css.balanceWinTitle}>{t('balanceTitle')}</div>
+            <button
+              type="button"
+              className={css.dialogClose}
+              title={t('close')}
+              onClick={() => { setBalanceOpen(false) }}
+            >
+              ×
+            </button>
+          </div>
+          <div className={css.balanceWinBody}>
+            <div className={css.balanceRowHeader}>
+              <button
+                type="button"
+                className={css.balanceSortBtn}
+                onClick={() => {
+                  setBalanceSort(prev => {
+                    if (prev === null || prev.key !== 'provider') return { key: 'provider', dir: 1 }
+                    if (prev.dir === 1) return { key: 'provider', dir: -1 }
+                    return null
+                  })
+                }}
+              >
+                {t('balanceColProvider')}
+                {balanceSort?.key === 'provider' ? (balanceSort.dir === 1 ? ' ▲' : ' ▼') : ''}
+              </button>
+              <button
+                type="button"
+                className={css.balanceSortBtn}
+                onClick={() => {
+                  setBalanceSort(prev => {
+                    if (prev === null || prev.key !== 'total') return { key: 'total', dir: -1 }
+                    if (prev.dir === -1) return { key: 'total', dir: 1 }
+                    return null
+                  })
+                }}
+              >
+                {t('balanceColBalance')}
+                {balanceSort?.key === 'total' ? (balanceSort.dir === 1 ? ' ▲' : ' ▼') : ''}
+              </button>
+              <button
+                type="button"
+                className={css.balanceRefreshAll}
+                title={t('balanceRefreshAll')}
+                disabled={refreshingAll}
+                onClick={() => {
+                  setRefreshingAll(true)
+                  refreshBalance()
+                  window.setTimeout(() => { setRefreshingAll(false) }, 1500)
+                }}
+              >
+                {refreshingAll ? '…' : '↻'}
+              </button>
+            </div>
+            <div className={css.balanceRow}>
+              <span className={css.balanceRowName} />
+              <span className={css.balanceRowValue} />
+              <span className={css.balanceRowRefresh} />
+            </div>
+            {sortedProviders.map(provider => {
+              const cell = renderProviderCell(provider)
+              const busy = refreshingProvider === provider
+                || (balanceByProvider.get(provider) === 'loading')
+              return (
+                <div key={provider} className={css.balanceRow}>
+                  <span className={css.balanceRowName} title={provider}>{provider}</span>
+                  <span
+                    className={`${css.balanceRowValue}${cell.cls !== undefined ? ` ${cell.cls}` : ''}`}
+                    title={cell.title}
+                  >
+                    {cell.text}
+                  </span>
+                  <button
+                    type="button"
+                    className={css.balanceRowRefresh}
+                    title={t('balanceRefreshOne')}
+                    disabled={busy || refreshingAll || cell.text === t('balanceUnsupported')}
+                    onClick={() => {
+                      setRefreshingProvider(provider)
+                      refreshBalance(provider)
+                      window.setTimeout(() => { setRefreshingProvider(null) }, 1500)
+                    }}
+                  >
+                    {busy ? '…' : '↻'}
+                  </button>
+                </div>
+              )
+            })}
+            {lastLabel !== '' && (
+              <div className={css.balanceLastLine}>{lastLabel}</div>
+            )}
+          </div>
+        </div>
       )}
       {logOpen && (
         <div

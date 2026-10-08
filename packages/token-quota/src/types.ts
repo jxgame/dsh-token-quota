@@ -70,6 +70,13 @@ export const TOKEN_QUOTA_DEFAULT_BALANCE: TokenQuotaBalanceSettings = {
   pollMinutes: 5,
 }
 
+/**
+ * Provider route keys the host knows how to query for account balance. A
+ * directory provider outside this list renders as "not integrated for query"
+ * in the balance window.
+ */
+export const TOKEN_QUOTA_BALANCE_PROVIDERS: readonly string[] = ['deepseek']
+
 /** Fetch state of the provider account balance. */
 export type TokenQuotaBalanceStatus = 'ok' | 'unconfigured' | 'error'
 
@@ -285,8 +292,8 @@ export interface TokenQuotaSnapshot {
   upgrade: TokenQuotaUpgrade | null
   /** Error from the most recent update check; `null` = no error (or never checked). */
   upgradeError: string | null
-  /** Cached provider account balance; absent while disabled or before the first fetch. */
-  balance?: TokenQuotaBalance
+  /** Cached per-provider account balances; absent while disabled or before the first fetch. */
+  balances?: TokenQuotaBalance[]
 }
 
 /** One historical daily usage record, shown in the log dialog. */

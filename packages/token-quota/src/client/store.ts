@@ -77,8 +77,8 @@ export interface TokenQuotaPanelState {
    * Keys not listed keep their catalog order after the listed ones.
    */
   order: string[]
-  /** Cached provider account balance from the Host, absent while disabled. */
-  balance: TokenQuotaBalance | undefined
+  /** Cached per-provider account balances from the Host. */
+  balances: TokenQuotaBalance[]
   /** Whether the account balance is displayed (mirrors the settings). */
   balanceEnabled: boolean
   /** Balance refresh interval in minutes (mirrors the settings). */
@@ -143,8 +143,8 @@ export type TokenQuotaPanelActions = {
   setOrder: (d: TokenQuotaPanelState, order: string[]) => void
   /** Adopt the Host's persisted notes and mark them as loaded. */
   setNotes: (d: TokenQuotaPanelState, notes: TokenQuotaNote[]) => void
-  /** Adopt the Host's latest balance snapshot (undefined = not shown). */
-  setBalance: (d: TokenQuotaPanelState, balance: TokenQuotaBalance | undefined) => void
+  /** Adopt the Host's latest per-provider balance snapshots. */
+  setBalances: (d: TokenQuotaPanelState, balances: TokenQuotaBalance[]) => void
   /** Adopt the balance display settings (enabled + poll interval). */
   setBalanceSettings: (d: TokenQuotaPanelState, enabled: boolean, pollMinutes: number) => void
   setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
@@ -188,7 +188,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       order: [],
       notes: [],
       notesLoaded: false,
-      balance: undefined,
+      balances: [],
       balanceEnabled: true,
       balancePollMinutes: 5,
       musicEnabled: false,
@@ -222,7 +222,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
       setOrder: (d, order) => { d.order = order },
       setNotes: (d, notes) => { d.notes = notes; d.notesLoaded = true },
-      setBalance: (d, balance) => { d.balance = balance },
+      setBalances: (d, balances) => { d.balances = balances },
       setBalanceSettings: (d, enabled, pollMinutes) => { d.balanceEnabled = enabled; d.balancePollMinutes = pollMinutes },
       setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
       setMusicVolume: (d, volume) => { d.musicVolume = volume },

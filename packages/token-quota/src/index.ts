@@ -329,6 +329,16 @@ function usageTokens(usage: TokenUsage): number {
  * Mount it beside the other rows (`@jxgame2020/dsh-token-quota`) and write
  * per-model limits through the `token-quota` settings namespace.
  */
+/**
+ * Providers the host can query for account balance, keyed by route key. Each
+ * entry names the credential reference (environment-variable name), the
+ * balance endpoint base, and the optional `*_BASE_URL` override variable.
+ * Directory providers outside this map render as "not integrated for query".
+ */
+const BALANCE_SOURCES: Readonly<Record<string, { keyEnv: string; baseURL: string; baseEnv?: string }>> = {
+  deepseek: { keyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', baseEnv: 'DEEPSEEK_BASE_URL' },
+}
+
 export class TokenQuotaService extends Service {
   static Config: z<TokenQuotaConfig> = z.object({
     storagePath: z.string().default(''),
@@ -356,12 +366,12 @@ export class TokenQuotaService extends Service {
   private updateTimer: ReturnType<typeof setTimeout> | undefined
   /** Whether the account balance is enabled (mirrors the settings document). */
   private balanceEnabled = TOKEN_QUOTA_DEFAULT_BALANCE.enabled
-  /** Cached provider account balance, served in the snapshot. */
-  private balance: TokenQuotaBalance | undefined
+  /** Cached per-provider account balances, served in the snapshot. */
+  private balances = new Map<string, TokenQuotaBalance>()
   /** Timer for the periodic balance poll. */
   private balanceTimer: ReturnType<typeof setTimeout> | undefined
-  /** In-flight balance refresh, to coalesce the periodic and manual triggers. */
-  private balanceFetch: Promise<void> | undefined
+  /** In-flight balance refreshes by provider, to coalesce overlapping triggers. */
+  private balanceFetches = new Map<string, Promise<void>>()
   /** In-flight update check, to coalesce the periodic and manual triggers. */
   private upgradeCheck: Promise<void> | undefined
   /** Per-session folded model key from the latest `request/header`. */
@@ -471,10 +481,10 @@ export class TokenQuotaService extends Service {
         const balanceEnabled = doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled
         const turnedOn = balanceEnabled && !this.balanceEnabled
         this.balanceEnabled = balanceEnabled
-        if (!balanceEnabled) this.balance = undefined
+        if (!balanceEnabled) this.balances.clear()
         this.syncBalancePolling()
-        // Flipping the toggle on: fetch right away so the panel shows a number.
-        if (turnedOn) void this.refreshBalance()
+        // Flipping the toggle on: fetch right away so the panel shows numbers.
+        if (turnedOn) void this.refreshAllBalances()
         if (doc.reset !== undefined
           && typeof doc.reset === 'object'
           && doc.reset !== null
@@ -536,7 +546,7 @@ export class TokenQuotaService extends Service {
     // Account balance: schedule its poll and fetch once now (cheap; the panel
     // gets a number immediately even before the settings document resolves).
     this.syncBalancePolling()
-    if (this.balanceEnabled) void this.refreshBalance()
+    if (this.balanceEnabled) void this.refreshAllBalances()
 
     ctx.effect(() => () => { this.disposeLocal() }, 'token-quota: flush on unload')
   }
@@ -586,10 +596,30 @@ export class TokenQuotaService extends Service {
           res.writeHead(405); res.end()
           return
         }
-        void this.refreshBalance().finally(() => {
-          const body = JSON.stringify(this.readSnapshot())
-          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
-          res.end(body)
+        const chunks: Buffer[] = []
+        req.on('data', (chunk) => { chunks.push(Buffer.from(chunk)) })
+        req.on('end', () => {
+          let provider: string | undefined
+          try {
+            const raw = Buffer.concat(chunks).toString('utf8')
+            if (raw !== '') {
+              const parsed: unknown = JSON.parse(raw)
+              if (typeof parsed === 'object' && parsed !== null
+                && typeof (parsed as { provider?: unknown }).provider === 'string') {
+                provider = (parsed as { provider: string }).provider
+              }
+            }
+          } catch {
+            // Malformed body: fall back to refreshing everything.
+          }
+          const task = provider !== undefined && provider in BALANCE_SOURCES
+            ? this.refreshProviderBalance(provider)
+            : this.refreshAllBalances()
+          void task.finally(() => {
+            const body = JSON.stringify(this.readSnapshot())
+            res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+            res.end(body)
+          })
         })
       },
     })
@@ -744,8 +774,8 @@ export class TokenQuotaService extends Service {
   /**
    * Start or stop the periodic balance poll to match the current setting. The
    * interval comes from the settings document; a poll chain re-arms itself
-   * after each fetch. No fetch happens here — callers decide (startup and the
-   * enabled-transition in `onChange` fetch immediately).
+   * after each refresh. No fetch happens here — callers decide (startup and
+   * the enabled-transition in `onChange` fetch immediately).
    */
   private syncBalancePolling(): void {
     if (this.balanceTimer !== undefined) {
@@ -759,20 +789,30 @@ export class TokenQuotaService extends Service {
       if (!this.balanceEnabled) return
       this.balanceTimer = setTimeout(() => {
         this.balanceTimer = undefined
-        void this.refreshBalance().finally(schedule)
+        void this.refreshAllBalances().finally(schedule)
       }, Math.max(60_000, minutes * 60_000))
     }
     schedule()
   }
 
+  /** Refresh every provider the host knows how to query. */
+  private refreshAllBalances(): Promise<void> {
+    return Promise.all(
+      Object.keys(BALANCE_SOURCES).map(provider => this.refreshProviderBalance(provider)),
+    ).then(() => undefined)
+  }
+
   /**
-   * Refresh the cached account balance. The API key is resolved through the
-   * harness credential seam (`credentials.resolve`) with the environment as a
-   * fallback, so the Models page key is used with nothing to type. A failed
-   * fetch keeps the previous value and marks the result as an error.
+   * Refresh one provider's cached account balance. The API key is resolved
+   * through the harness credential seam (`credentials.resolve`) with the
+   * environment as a fallback, so the Models page key is used with nothing to
+   * type. A failed fetch keeps the previous value and marks it as an error.
    */
-  private async refreshBalance(): Promise<void> {
-    if (this.balanceFetch !== undefined) return this.balanceFetch
+  private async refreshProviderBalance(provider: string): Promise<void> {
+    const source = BALANCE_SOURCES[provider]
+    if (source === undefined) return
+    const existing = this.balanceFetches.get(provider)
+    if (existing !== undefined) return existing
     const run = async (): Promise<void> => {
       if (!this.balanceEnabled) return
       const credentials = this.ctx.get('credentials') as
@@ -781,24 +821,26 @@ export class TokenQuotaService extends Service {
       let key: string | undefined
       if (credentials !== undefined) {
         try {
-          key = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value
+          key = (await credentials.resolve(source.keyEnv))?.value
         } catch {
           // Seam unreachable: fall through to the environment.
         }
       }
-      if (key === undefined || key === '') key = process.env.DEEPSEEK_API_KEY
+      if (key === undefined || key === '') key = process.env[source.keyEnv]
       if (key === undefined || key === '') {
-        this.balance = {
-          provider: 'deepseek',
+        this.balances.set(provider, {
+          provider,
           currency: 'CNY',
           total: 0,
           isAvailable: false,
           fetchedAt: Date.now(),
           status: 'unconfigured',
-        }
+        })
         return
       }
-      const base = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
+      const base = source.baseEnv !== undefined
+        ? (process.env[source.baseEnv] ?? source.baseURL)
+        : source.baseURL
       try {
         const controller = new AbortController()
         const timer = setTimeout(() => { controller.abort() }, 10_000)
@@ -825,8 +867,8 @@ export class TokenQuotaService extends Service {
             : NaN
           return Number.isFinite(n) ? n : 0
         }
-        this.balance = {
-          provider: 'deepseek',
+        this.balances.set(provider, {
+          provider,
           currency: typeof first?.currency === 'string' && first.currency !== ''
             ? first.currency
             : 'CNY',
@@ -836,11 +878,11 @@ export class TokenQuotaService extends Service {
           isAvailable: data?.is_available !== false,
           fetchedAt: Date.now(),
           status: 'ok',
-        }
+        })
       } catch (error) {
-        const previous = this.balance
+        const previous = this.balances.get(provider)
         const next: TokenQuotaBalance = {
-          provider: 'deepseek',
+          provider,
           currency: previous?.currency ?? 'CNY',
           total: previous?.total ?? 0,
           isAvailable: false,
@@ -852,11 +894,12 @@ export class TokenQuotaService extends Service {
         // exactOptionalPropertyTypes forbids explicit `undefined`).
         if (previous?.granted !== undefined) next.granted = previous.granted
         if (previous?.toppedUp !== undefined) next.toppedUp = previous.toppedUp
-        this.balance = next
+        this.balances.set(provider, next)
       }
     }
-    this.balanceFetch = run().finally(() => { this.balanceFetch = undefined })
-    return this.balanceFetch
+    const promise = run().finally(() => { this.balanceFetches.delete(provider) })
+    this.balanceFetches.set(provider, promise)
+    return promise
   }
 
   /** Read the full per-cycle usage history (log dialog data). */
@@ -922,7 +965,7 @@ export class TokenQuotaService extends Service {
       upgrade: this.upgrade,
       upgradeError: this.upgradeError,
     }
-    if (this.balanceEnabled && this.balance !== undefined) snapshot.balance = this.balance
+    if (this.balanceEnabled && this.balances.size > 0) snapshot.balances = [...this.balances.values()]
     return snapshot
   }
 

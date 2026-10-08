@@ -398,7 +398,7 @@ export function apply(ctx: ClientContext): void {
       bound?.setSnapshot(snapshot)
       bound?.setUpgrade(snapshot.upgrade ?? null)
       bound?.setUpgradeError(snapshot.upgradeError ?? null)
-      bound?.setBalance(snapshot.balance)
+      bound?.setBalances(snapshot.balances ?? [])
       actOnFull(snapshot)
     })
     if (pullCount % 2 === 0) refreshCurrent()
@@ -481,9 +481,15 @@ export function apply(ctx: ClientContext): void {
     void scope.set('balance', { enabled, pollMinutes })
   }
 
-  /** Ask the Host to refresh the account balance now and adopt the result. */
-  const refreshBalance = (): void => {
-    void fetch('/token-quota/refresh-balance', { method: 'POST' }).then(
+  /**
+   * Ask the Host to refresh account balances now and adopt the result.
+   * With a provider key only that provider is refreshed; otherwise all of
+   * them are.
+   */
+  const refreshBalance = (provider?: string): void => {
+    const init: RequestInit = { method: 'POST', headers: { 'content-type': 'application/json' } }
+    if (provider !== undefined) init.body = JSON.stringify({ provider })
+    void fetch('/token-quota/refresh-balance', init).then(
       response => response.ok ? response.json() as Promise<TokenQuotaSnapshot> : undefined,
       () => undefined,
     ).then((snapshot) => {
@@ -491,7 +497,7 @@ export function apply(ctx: ClientContext): void {
       bound?.setSnapshot(snapshot)
       bound?.setUpgrade(snapshot.upgrade ?? null)
       bound?.setUpgradeError(snapshot.upgradeError ?? null)
-      bound?.setBalance(snapshot.balance)
+      bound?.setBalances(snapshot.balances ?? [])
     })
   }
 
