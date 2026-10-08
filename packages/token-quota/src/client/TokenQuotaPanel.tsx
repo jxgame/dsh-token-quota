@@ -275,6 +275,13 @@ export function TokenQuotaPanel({
   const [balanceSort, setBalanceSort] = useState<{ key: 'provider' | 'total', dir: 1 | -1 } | null>(null)
   const [refreshingAll, setRefreshingAll] = useState(false)
   const [refreshingProvider, setRefreshingProvider] = useState<string | null>(null)
+  /** Which model row is currently hovered (model key), for quota/balance flip. */
+  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null)
+  /** Flip state in rowMeta: 0 = shows quota text, 1 = shows balance text. Cycles every 3s while hovering. */
+  const [metaToggle, setMetaToggle] = useState(0)
+  /** Last time we auto-refreshed a stale balance on row-hover (per-provider epoch ms),
+   *  throttles refreshes to at most one per 60s per provider. */
+  const lastRowStaleRefreshRef = useRef<Record<string, number>>({})
   // Note whose title is being edited (id) plus the in-progress draft. The
   // title is a plain label until the pencil is pressed, so the title bar
   // stays fully draggable the rest of the time.
@@ -748,6 +755,53 @@ export function TokenQuotaPanel({
     ? t('balanceLastUpdated').replace('{v}', formatBalanceTime(lastFetchedAt))
     : ''
 
+  /**
+   * Flip quota/balance every 3s while any supported row is hovered. If nothing
+   * is hovered (or the hovered row's provider has no balance data) we reset the
+   * toggle so quota shows first next time.
+   */
+  useEffect(() => {
+    if (hoveredRowKey === null) { setMetaToggle(0); return }
+    // Decide whether the hovered row's provider is eligible for balance display.
+    const [prov] = hoveredRowKey.split('/', 1)
+    const bal = balances.find(b => b.provider === prov)
+    if (bal === undefined || bal.status !== 'ok') { setMetaToggle(0); return }
+    const id = window.setInterval(() => { setMetaToggle(v => (v + 1) % 2) }, 3000)
+    return () => { window.clearInterval(id) }
+  }, [hoveredRowKey, balances])
+
+  /** On row hover, if the provider balance is stale (>5min since last ok fetch), kick off a single-provider refresh (throttled to 1/min). */
+  const triggerRowBalanceRefreshIfStale = (provider: string): void => {
+    const bal = balances.find(b => b.provider === provider)
+    if (bal === undefined || bal.status !== 'ok') return
+    const age = Date.now() - bal.fetchedAt
+    if (age < 5 * 60_000) return
+    const last = lastRowStaleRefreshRef.current[provider] ?? 0
+    if (Date.now() - last < 60_000) return
+    lastRowStaleRefreshRef.current[provider] = Date.now()
+    setRefreshingProvider(provider)
+    refreshBalance(provider)
+    window.setTimeout(() => { setRefreshingProvider(prev => prev === provider ? null : prev) }, 1500)
+  }
+
+  /** Quota text shown on the right of each model row (used/lot or used · unlimited). */
+  const quotaText = (row: ModelQuotaRow): string => row.limit > 0
+    ? `${formatTokens(row.used)} / ${formatTokens(row.limit)}`
+    : `${formatTokens(row.used)} · ${t('unlimited')}`
+
+  /** Balance text shown when hovering a supported-provider row, or '' when unavailable. */
+  const balanceTextForRow = (row: ModelQuotaRow): { text: string; cls?: string } => {
+    const bal = balances.find(b => b.provider === row.provider)
+    if (bal === undefined) return { text: '' }
+    if (bal.status === 'ok' && bal.isAvailable) {
+      if (bal.total < 5) {
+        return { text: `${currencySymbol(bal.currency)}${bal.total.toFixed(2)}`, cls: css.balanceValueLow as string }
+      }
+      return { text: `${currencySymbol(bal.currency)}${bal.total.toFixed(2)}`, cls: css.balanceValueOk as string }
+    }
+    return { text: '' }
+  }
+
   // The panel dims when the pointer is away ONLY when the user opted in
   // (settings → 失焦窗口透明). While the upgrade banner flashes, the panel
   // is forced opaque regardless.
@@ -923,6 +977,13 @@ export function TokenQuotaPanel({
             <div
               key={row.key}
               className={`${css.row}${dragKey === row.key ? ` ${css.rowDragging}` : ''}${dropKey === row.key && dragKey !== row.key ? ` ${css.rowDropTarget}` : ''}`}
+              onMouseEnter={() => {
+                setHoveredRowKey(row.key)
+                triggerRowBalanceRefreshIfStale(row.provider)
+              }}
+              onMouseLeave={() => {
+                setHoveredRowKey(prev => prev === row.key ? null : prev)
+              }}
               onDragOver={(event) => {
                 if (dragKey === null || dragKey === row.key) return
                 event.preventDefault()
@@ -966,9 +1027,13 @@ export function TokenQuotaPanel({
                   )}
                 </span>
                 <span className={css.rowMeta}>
-                  {row.limit > 0
-                    ? `${formatTokens(row.used)} / ${formatTokens(row.limit)}`
-                    : `${formatTokens(row.used)} · ${t('unlimited')}`}
+                  {(() => {
+                    const bt = balanceTextForRow(row)
+                    const showBalance = hoveredRowKey === row.key && bt.text !== '' && metaToggle === 1
+                    return showBalance
+                      ? <span className={bt.cls}>{bt.text}</span>
+                      : <>{quotaText(row)}</>
+                  })()}
                   <button
                     type="button"
                     className={css.gearBtn}
