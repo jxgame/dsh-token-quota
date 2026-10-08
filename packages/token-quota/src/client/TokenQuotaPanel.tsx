@@ -839,45 +839,6 @@ export function TokenQuotaPanel({
                 )
             )}
           </div>
-          <div className={css.notesBar} onPointerDown={(event) => { event.stopPropagation() }}>
-            {notes.map((note) => {
-              const open = note.visible && !note.collapsed
-              return (
-                <button
-                  key={note.id}
-                  type="button"
-                  className={`${css.noteChip}${open ? ` ${css.noteChipOpen}` : ''}`}
-                  title={note.title.trim() === '' ? t('noteUntitled') : note.title}
-                  onClick={() => { patchNote(note.id, { visible: true, collapsed: false }) }}
-                  onContextMenu={(event) => {
-                    event.preventDefault()
-                    setNoteMenu({ id: note.id, x: event.clientX, y: event.clientY })
-                  }}
-                >
-                  {noteInitial(note.title)}
-                </button>
-              )
-            })}
-            <button
-              type="button"
-              className={css.noteNew}
-              disabled={notes.length >= TOKEN_QUOTA_MAX_NOTES}
-              title={notes.length >= TOKEN_QUOTA_MAX_NOTES ? t('noteMaxHint') : t('noteNewHint')}
-              onClick={createNote}
-            >
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                <path
-                  d="M4 1.6h4.6L12.4 5.4v9H4z"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.2"
-                  strokeLinejoin="round"
-                />
-                <path d="M8.4 1.6v3.9h4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-              </svg>
-              <span className={css.noteNewPlus}>+</span>
-            </button>
-          </div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
           <button
@@ -895,37 +856,76 @@ export function TokenQuotaPanel({
           <button type="button" className={css.settingsBtn} onClick={openSettings}>
             {t('settings')}
           </button>
-          {balanceEnabled && (
-            <button
-              type="button"
-              className={`${css.settingsBtn}${balanceOpen ? ` ${css.settingsBtnActive}` : ''}`}
-              title={t('balanceTitle')}
-              onClick={() => {
-                if (balanceOpen) { setBalanceOpen(false); return }
-                const winW = 280
-                const rect = panelRef.current?.getBoundingClientRect()
-                if (rect !== undefined) {
-                  setBalancePos({
-                    x: Math.max(8, rect.left - winW - 8),
-                    y: rect.top,
-                  })
-                } else {
-                  setBalancePos({ x: Math.max(8, (typeof window !== 'undefined' ? window.innerWidth : 800) - 12 - 320 - winW - 8), y: 56 })
-                }
-                setBalanceOpen(true)
-              }}
-              aria-pressed={balanceOpen}
-            >
-              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
-                <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor">¥</text>
-              </svg>
-            </button>
-          )}
           <button type="button" className={css.collapse} onClick={() => { setCollapsed(true) }}>
             {t('collapse')}
           </button>
         </div>
+      </div>
+      <div className={css.notesBar} onPointerDown={(event) => { event.stopPropagation() }}>
+        {notes.map((note) => {
+          const open = note.visible && !note.collapsed
+          return (
+            <button
+              key={note.id}
+              type="button"
+              className={`${css.noteChip}${open ? ` ${css.noteChipOpen}` : ''}`}
+              title={note.title.trim() === '' ? t('noteUntitled') : note.title}
+              onClick={() => { patchNote(note.id, { visible: true, collapsed: false }) }}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                setNoteMenu({ id: note.id, x: event.clientX, y: event.clientY })
+              }}
+            >
+              {noteInitial(note.title)}
+            </button>
+          )
+        })}
+        <button
+          type="button"
+          className={css.noteNew}
+          disabled={notes.length >= TOKEN_QUOTA_MAX_NOTES}
+          title={notes.length >= TOKEN_QUOTA_MAX_NOTES ? t('noteMaxHint') : t('noteNewHint')}
+          onClick={createNote}
+        >
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+            <path
+              d="M4 1.6h4.6L12.4 5.4v9H4z"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.2"
+              strokeLinejoin="round"
+            />
+            <path d="M8.4 1.6v3.9h4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+          </svg>
+          <span className={css.noteNewPlus}>+</span>
+        </button>
+        {balanceEnabled && (
+              <button
+                type="button"
+                className={`${css.noteNew} ${css.balanceToggle}${balanceOpen ? ` ${css.balanceToggleOpen}` : ''}`}
+                title={t('balanceTitle')}
+                onClick={() => {
+                  if (balanceOpen) { setBalanceOpen(false); return }
+                  const winW = 280
+                  const rect = panelRef.current?.getBoundingClientRect()
+                  if (rect !== undefined) {
+                    setBalancePos({
+                      x: Math.max(8, rect.left - winW - 8),
+                      y: rect.top,
+                    })
+                  } else {
+                    setBalancePos({ x: Math.max(8, (typeof window !== 'undefined' ? window.innerWidth : 800) - 12 - 320 - winW - 8), y: 56 })
+                  }
+                  setBalanceOpen(true)
+                }}
+                aria-pressed={balanceOpen}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                  <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor">¥</text>
+                </svg>
+              </button>
+            )}
       </div>
       <div className={css.body}>
         {loading && <div className={css.notice}>{t('loading')}</div>}

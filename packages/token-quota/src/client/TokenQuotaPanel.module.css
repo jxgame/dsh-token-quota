@@ -91,7 +91,8 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 4px;
+  padding: 4px 12px 0;
+  background: var(--dsw-alias-bg-layer-2);
 }
 
 .noteChip {
