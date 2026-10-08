@@ -766,6 +766,8 @@ export function TokenQuotaPanel({
     const [prov] = hoveredRowKey.split('/', 1)
     const bal = balances.find(b => b.provider === prov)
     if (bal === undefined || bal.status !== 'ok') { setMetaToggle(0); return }
+    // Show the balance immediately on hover, then flip every 3s.
+    setMetaToggle(1)
     const id = window.setInterval(() => { setMetaToggle(v => (v + 1) % 2) }, 3000)
     return () => { window.clearInterval(id) }
   }, [hoveredRowKey, balances])
@@ -875,33 +877,6 @@ export function TokenQuotaPanel({
               </svg>
               <span className={css.noteNewPlus}>+</span>
             </button>
-            {balanceEnabled && (
-              <button
-                type="button"
-                className={`${css.noteNew} ${css.balanceToggle}${balanceOpen ? ` ${css.balanceToggleOpen}` : ''}`}
-                title={t('balanceTitle')}
-                onClick={() => {
-                  if (balanceOpen) { setBalanceOpen(false); return }
-                  const winW = 280
-                  const rect = panelRef.current?.getBoundingClientRect()
-                  if (rect !== undefined) {
-                    setBalancePos({
-                      x: Math.max(8, rect.left - winW - 8),
-                      y: rect.top,
-                    })
-                  } else {
-                    setBalancePos({ x: Math.max(8, (typeof window !== 'undefined' ? window.innerWidth : 800) - 12 - 320 - winW - 8), y: 56 })
-                  }
-                  setBalanceOpen(true)
-                }}
-                aria-pressed={balanceOpen}
-              >
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
-                  <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor">¥</text>
-                </svg>
-              </button>
-            )}
           </div>
         </div>
         <div className={css.headerActions} onPointerDown={(event) => { event.stopPropagation() }}>
@@ -920,6 +895,33 @@ export function TokenQuotaPanel({
           <button type="button" className={css.settingsBtn} onClick={openSettings}>
             {t('settings')}
           </button>
+          {balanceEnabled && (
+            <button
+              type="button"
+              className={`${css.settingsBtn}${balanceOpen ? ` ${css.settingsBtnActive}` : ''}`}
+              title={t('balanceTitle')}
+              onClick={() => {
+                if (balanceOpen) { setBalanceOpen(false); return }
+                const winW = 280
+                const rect = panelRef.current?.getBoundingClientRect()
+                if (rect !== undefined) {
+                  setBalancePos({
+                    x: Math.max(8, rect.left - winW - 8),
+                    y: rect.top,
+                  })
+                } else {
+                  setBalancePos({ x: Math.max(8, (typeof window !== 'undefined' ? window.innerWidth : 800) - 12 - 320 - winW - 8), y: 56 })
+                }
+                setBalanceOpen(true)
+              }}
+              aria-pressed={balanceOpen}
+            >
+              <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+                <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="700" fill="currentColor">¥</text>
+              </svg>
+            </button>
+          )}
           <button type="button" className={css.collapse} onClick={() => { setCollapsed(true) }}>
             {t('collapse')}
           </button>
@@ -1396,11 +1398,6 @@ export function TokenQuotaPanel({
               >
                 {refreshingAll ? '…' : '↻'}
               </button>
-            </div>
-            <div className={css.balanceRow}>
-              <span className={css.balanceRowName} />
-              <span className={css.balanceRowValue} />
-              <span className={css.balanceRowRefresh} />
             </div>
             {sortedProviders.map(provider => {
               const cell = renderProviderCell(provider)
