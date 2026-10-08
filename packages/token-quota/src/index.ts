@@ -49,6 +49,7 @@ import {
   TOKEN_QUOTA_NAMESPACE,
   tokenQuotaKey,
   type TokenQuotaConfig,
+  type TokenQuotaBalance,
   type TokenQuotaEntry,
   type TokenQuotaLog,
   type TokenQuotaLogEntry,
@@ -59,6 +60,7 @@ import {
   type TokenQuotaUpgrade,
   TOKEN_QUOTA_DEFAULT_MUSIC,
   TOKEN_QUOTA_MAX_NOTES,
+  TOKEN_QUOTA_DEFAULT_BALANCE,
 } from './types.ts'
 import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
 
@@ -259,6 +261,11 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
     style: z.union(['major', 'minor', 'pentatonic']).default(TOKEN_QUOTA_DEFAULT_MUSIC.style),
     onlyCurrentSession: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession),
   }).default({ ...TOKEN_QUOTA_DEFAULT_MUSIC }),
+  // Account balance: host polls the provider endpoint, panel displays it.
+  balance: z.object({
+    enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_BALANCE.enabled),
+    pollMinutes: z.number().min(1).max(120).default(TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_BALANCE }),
 })
 
 /** Serialized counter file shape. */
@@ -338,7 +345,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [] })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE } })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -347,6 +354,14 @@ export class TokenQuotaService extends Service {
   private upgradeError: string | null = null
   /** Timer for the periodic update check. */
   private updateTimer: ReturnType<typeof setTimeout> | undefined
+  /** Whether the account balance is enabled (mirrors the settings document). */
+  private balanceEnabled = TOKEN_QUOTA_DEFAULT_BALANCE.enabled
+  /** Cached provider account balance, served in the snapshot. */
+  private balance: TokenQuotaBalance | undefined
+  /** Timer for the periodic balance poll. */
+  private balanceTimer: ReturnType<typeof setTimeout> | undefined
+  /** In-flight balance refresh, to coalesce the periodic and manual triggers. */
+  private balanceFetch: Promise<void> | undefined
   /** In-flight update check, to coalesce the periodic and manual triggers. */
   private upgradeCheck: Promise<void> | undefined
   /** Per-session folded model key from the latest `request/header`. */
@@ -365,6 +380,8 @@ export class TokenQuotaService extends Service {
   private disposeRouteCheck: (() => void) | undefined
   /** Disposer for the optional clear-log route (`POST /token-quota/clear-log`). */
   private disposeRouteClear: (() => void) | undefined
+  /** Disposer for the optional balance-refresh route (`POST /token-quota/refresh-balance`). */
+  private disposeRouteBalance: (() => void) | undefined
   /** Disposer for the optional music-event route (`GET /token-quota/events`, SSE). */
   private disposeRouteEvents: (() => void) | undefined
   /** Live SSE subscribers receiving streamed music actions. */
@@ -405,6 +422,12 @@ export class TokenQuotaService extends Service {
             checkUpdates: doc.checkUpdates ?? true,
             dimWhenIdle: doc.dimWhenIdle ?? false,
             order: Array.isArray(doc.order) ? doc.order : [],
+            balance: {
+              enabled: doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled,
+              pollMinutes: typeof doc.balance?.pollMinutes === 'number'
+                ? Math.max(1, Math.min(120, Math.round(doc.balance.pollMinutes)))
+                : TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes,
+            },
             notes: Array.isArray(doc.notes)
               ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES).flatMap((note) => {
                 if (typeof note.id !== 'string') return []
@@ -445,6 +468,13 @@ export class TokenQuotaService extends Service {
           : undefined
         this.checkUpdates = doc.checkUpdates
         this.syncUpdateChecking()
+        const balanceEnabled = doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled
+        const turnedOn = balanceEnabled && !this.balanceEnabled
+        this.balanceEnabled = balanceEnabled
+        if (!balanceEnabled) this.balance = undefined
+        this.syncBalancePolling()
+        // Flipping the toggle on: fetch right away so the panel shows a number.
+        if (turnedOn) void this.refreshBalance()
         if (doc.reset !== undefined
           && typeof doc.reset === 'object'
           && doc.reset !== null
@@ -503,6 +533,10 @@ export class TokenQuotaService extends Service {
     // settings onChange above may already have started it once the document
     // resolved; this guarantees a check even when the document arrives later).
     this.syncUpdateChecking()
+    // Account balance: schedule its poll and fetch once now (cheap; the panel
+    // gets a number immediately even before the settings document resolves).
+    this.syncBalancePolling()
+    if (this.balanceEnabled) void this.refreshBalance()
 
     ctx.effect(() => () => { this.disposeLocal() }, 'token-quota: flush on unload')
   }
@@ -538,6 +572,21 @@ export class TokenQuotaService extends Service {
       path: '/token-quota/check-updates',
       handler: (_req, res) => {
         void this.refreshUpgrade().finally(() => {
+          const body = JSON.stringify(this.readSnapshot())
+          res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+          res.end(body)
+        })
+      },
+    })
+    this.disposeRouteBalance = server.register({
+      kind: 'exact',
+      path: '/token-quota/refresh-balance',
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405); res.end()
+          return
+        }
+        void this.refreshBalance().finally(() => {
           const body = JSON.stringify(this.readSnapshot())
           res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
           res.end(body)
@@ -692,6 +741,124 @@ export class TokenQuotaService extends Service {
     }, UPDATE_CHECK_INTERVAL_MS)
   }
 
+  /**
+   * Start or stop the periodic balance poll to match the current setting. The
+   * interval comes from the settings document; a poll chain re-arms itself
+   * after each fetch. No fetch happens here — callers decide (startup and the
+   * enabled-transition in `onChange` fetch immediately).
+   */
+  private syncBalancePolling(): void {
+    if (this.balanceTimer !== undefined) {
+      clearTimeout(this.balanceTimer)
+      this.balanceTimer = undefined
+    }
+    if (!this.balanceEnabled) return
+    const minutes = this.settingsSource().balance?.pollMinutes
+      ?? TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes
+    const schedule = (): void => {
+      if (!this.balanceEnabled) return
+      this.balanceTimer = setTimeout(() => {
+        this.balanceTimer = undefined
+        void this.refreshBalance().finally(schedule)
+      }, Math.max(60_000, minutes * 60_000))
+    }
+    schedule()
+  }
+
+  /**
+   * Refresh the cached account balance. The API key is resolved through the
+   * harness credential seam (`credentials.resolve`) with the environment as a
+   * fallback, so the Models page key is used with nothing to type. A failed
+   * fetch keeps the previous value and marks the result as an error.
+   */
+  private async refreshBalance(): Promise<void> {
+    if (this.balanceFetch !== undefined) return this.balanceFetch
+    const run = async (): Promise<void> => {
+      if (!this.balanceEnabled) return
+      const credentials = this.ctx.get('credentials') as
+        | { resolve(ref: string): Promise<{ value: string } | undefined> }
+        | undefined
+      let key: string | undefined
+      if (credentials !== undefined) {
+        try {
+          key = (await credentials.resolve('DEEPSEEK_API_KEY'))?.value
+        } catch {
+          // Seam unreachable: fall through to the environment.
+        }
+      }
+      if (key === undefined || key === '') key = process.env.DEEPSEEK_API_KEY
+      if (key === undefined || key === '') {
+        this.balance = {
+          provider: 'deepseek',
+          currency: 'CNY',
+          total: 0,
+          isAvailable: false,
+          fetchedAt: Date.now(),
+          status: 'unconfigured',
+        }
+        return
+      }
+      const base = process.env.DEEPSEEK_BASE_URL ?? 'https://api.deepseek.com'
+      try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => { controller.abort() }, 10_000)
+        let res: Response
+        try {
+          res = await fetch(`${base}/user/balance`, {
+            headers: { authorization: `Bearer ${key}`, accept: 'application/json' },
+            signal: controller.signal,
+          })
+        } finally {
+          clearTimeout(timer)
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as {
+          is_available?: unknown
+          balance_infos?: unknown
+        } | null
+        const first = Array.isArray(data?.balance_infos)
+          ? (data.balance_infos[0] as { currency?: unknown; total_balance?: unknown; granted_balance?: unknown; topped_up_balance?: unknown } | undefined)
+          : undefined
+        const num = (value: unknown): number => {
+          const n = typeof value === 'number' ? value
+            : typeof value === 'string' && value !== '' ? Number(value)
+            : NaN
+          return Number.isFinite(n) ? n : 0
+        }
+        this.balance = {
+          provider: 'deepseek',
+          currency: typeof first?.currency === 'string' && first.currency !== ''
+            ? first.currency
+            : 'CNY',
+          total: num(first?.total_balance),
+          granted: num(first?.granted_balance),
+          toppedUp: num(first?.topped_up_balance),
+          isAvailable: data?.is_available !== false,
+          fetchedAt: Date.now(),
+          status: 'ok',
+        }
+      } catch (error) {
+        const previous = this.balance
+        const next: TokenQuotaBalance = {
+          provider: 'deepseek',
+          currency: previous?.currency ?? 'CNY',
+          total: previous?.total ?? 0,
+          isAvailable: false,
+          fetchedAt: previous?.fetchedAt ?? Date.now(),
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        }
+        // Keep the last good numbers (and only set them when present, since
+        // exactOptionalPropertyTypes forbids explicit `undefined`).
+        if (previous?.granted !== undefined) next.granted = previous.granted
+        if (previous?.toppedUp !== undefined) next.toppedUp = previous.toppedUp
+        this.balance = next
+      }
+    }
+    this.balanceFetch = run().finally(() => { this.balanceFetch = undefined })
+    return this.balanceFetch
+  }
+
   /** Read the full per-cycle usage history (log dialog data). */
   readLog(): TokenQuotaLog {
     this.rollCycleIfNeeded()
@@ -749,7 +916,14 @@ export class TokenQuotaService extends Service {
       })
     }
     entries.sort((left, right) => left.key.localeCompare(right.key))
-    return { day: this.cycle, entries, upgrade: this.upgrade, upgradeError: this.upgradeError }
+    const snapshot: TokenQuotaSnapshot = {
+      day: this.cycle,
+      entries,
+      upgrade: this.upgrade,
+      upgradeError: this.upgradeError,
+    }
+    if (this.balanceEnabled && this.balance !== undefined) snapshot.balance = this.balance
+    return snapshot
   }
 
   /** Today's used tokens for one model key, or `0`. */
@@ -1025,6 +1199,11 @@ export class TokenQuotaService extends Service {
     if (this.disposeRouteLog !== undefined) this.disposeRouteLog()
     if (this.disposeRouteCheck !== undefined) this.disposeRouteCheck()
     if (this.disposeRouteClear !== undefined) this.disposeRouteClear()
+    if (this.disposeRouteBalance !== undefined) this.disposeRouteBalance()
+    if (this.balanceTimer !== undefined) {
+      clearTimeout(this.balanceTimer)
+      this.balanceTimer = undefined
+    }
     if (this.disposeRouteEvents !== undefined) this.disposeRouteEvents()
     for (const res of this.musicClients) {
       try { res.end() } catch { /* ignore */ }

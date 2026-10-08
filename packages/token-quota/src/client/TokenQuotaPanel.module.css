@@ -495,6 +495,80 @@
   cursor: default;
 }
 
+/* Account-balance bar pinned above the model rows. */
+.balanceBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--dsw-alias-label-primary);
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  font-variant-numeric: tabular-nums;
+}
+
+.balanceBarText {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.balanceBarBadge {
+  flex: none;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--dsw-alias-state-error-primary);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.balanceBarDim {
+  color: var(--dsw-alias-label-secondary);
+  font-weight: 500;
+}
+
+.balanceBarLow {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.balanceBarError {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.balanceBarRefresh {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.balanceBarRefresh:hover:not(:disabled) {
+  color: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-bg-layer-1);
+}
+
+.balanceBarRefresh:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .notice,
 .noticeError {
   padding: 10px 12px;

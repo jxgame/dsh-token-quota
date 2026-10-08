@@ -14,6 +14,7 @@ import type { ModelProviderGroup, ModelSelection } from '@deepseek-ai/dsh-api-se
 import type {
   TokenQuotaFullAction,
   TokenQuotaLog,
+  TokenQuotaBalance,
   TokenQuotaMusicStyle,
   TokenQuotaNote,
   TokenQuotaReset,
@@ -76,6 +77,12 @@ export interface TokenQuotaPanelState {
    * Keys not listed keep their catalog order after the listed ones.
    */
   order: string[]
+  /** Cached provider account balance from the Host, absent while disabled. */
+  balance: TokenQuotaBalance | undefined
+  /** Whether the account balance is displayed (mirrors the settings). */
+  balanceEnabled: boolean
+  /** Balance refresh interval in minutes (mirrors the settings). */
+  balancePollMinutes: number
   /** Floating scratchpad notes as persisted by the Host. */
   notes: TokenQuotaNote[]
   /**
@@ -136,6 +143,10 @@ export type TokenQuotaPanelActions = {
   setOrder: (d: TokenQuotaPanelState, order: string[]) => void
   /** Adopt the Host's persisted notes and mark them as loaded. */
   setNotes: (d: TokenQuotaPanelState, notes: TokenQuotaNote[]) => void
+  /** Adopt the Host's latest balance snapshot (undefined = not shown). */
+  setBalance: (d: TokenQuotaPanelState, balance: TokenQuotaBalance | undefined) => void
+  /** Adopt the balance display settings (enabled + poll interval). */
+  setBalanceSettings: (d: TokenQuotaPanelState, enabled: boolean, pollMinutes: number) => void
   setMusicEnabled: (d: TokenQuotaPanelState, enabled: boolean) => void
   setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
   setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
@@ -177,6 +188,9 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       order: [],
       notes: [],
       notesLoaded: false,
+      balance: undefined,
+      balanceEnabled: true,
+      balancePollMinutes: 5,
       musicEnabled: false,
       musicVolume: 0.5,
       musicStyle: 'pentatonic',
@@ -208,6 +222,8 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setDimWhenIdle: (d, dimWhenIdle) => { d.dimWhenIdle = dimWhenIdle },
       setOrder: (d, order) => { d.order = order },
       setNotes: (d, notes) => { d.notes = notes; d.notesLoaded = true },
+      setBalance: (d, balance) => { d.balance = balance },
+      setBalanceSettings: (d, enabled, pollMinutes) => { d.balanceEnabled = enabled; d.balancePollMinutes = pollMinutes },
       setMusicEnabled: (d, enabled) => { d.musicEnabled = enabled },
       setMusicVolume: (d, volume) => { d.musicVolume = volume },
       setMusicStyle: (d, style) => { d.musicStyle = style },

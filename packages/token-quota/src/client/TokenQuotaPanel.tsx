@@ -60,6 +60,10 @@ export interface TokenQuotaPanelInjected {
   setModelOrder: (order: string[]) => void
   /** Persist the floating scratchpad notes (content, title, placement). */
   saveNotes: (notes: TokenQuotaNote[]) => void
+  /** Persist the account-balance display settings. */
+  setBalanceSettings: (enabled: boolean, pollMinutes: number) => void
+  /** Ask the Host to refresh the account balance now. */
+  refreshBalance: () => void
   /** Toggle the live music output (requires a user gesture to start audio). */
   setMusicEnabled: (enabled: boolean) => void
   /** Change the live-music master volume 0..1. */
@@ -180,6 +184,15 @@ function noteInitial(title: string): string {
   return Array.from(trimmed)[0] ?? '·'
 }
 
+/** Currency symbol for the balance bar; a raw code is appended for unknowns. */
+function currencySymbol(currency: string): string {
+  if (currency === 'CNY') return '¥'
+  if (currency === 'USD') return '$'
+  if (currency === 'EUR') return '€'
+  if (currency === 'GBP') return '£'
+  return `${currency} `
+}
+
 /** Default geometry of a new note; later notes cascade so they don't stack. */
 const NOTE_DEFAULT_SIZE = 220
 const NOTE_MIN_WIDTH = 150
@@ -209,7 +222,7 @@ function loadPanelPos(): Pos | null {
  * @returns the panel element tree.
  */
 export function TokenQuotaPanel({
-  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder, saveNotes,
+  t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
   setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
@@ -244,6 +257,8 @@ export function TokenQuotaPanel({
   const [noteMenu, setNoteMenu] = useState<{ id: string, x: number, y: number } | null>(null)
   // Note window that was touched last, painted above its siblings.
   const [activeNote, setActiveNote] = useState<string | null>(null)
+  // Brief spin state while a manual balance refresh is in flight.
+  const [refreshingBalance, setRefreshingBalance] = useState(false)
   // Note whose title is being edited (id) plus the in-progress draft. The
   // title is a plain label until the pencil is pressed, so the title bar
   // stays fully draggable the rest of the time.
@@ -397,6 +412,9 @@ export function TokenQuotaPanel({
   const checkUpdates = useStore(s => s.checkUpdates)
   const dimWhenIdle = useStore(s => s.dimWhenIdle)
   const order = useStore(s => s.order)
+  const balance = useStore(s => s.balance)
+  const balanceEnabled = useStore(s => s.balanceEnabled)
+  const balancePollMinutes = useStore(s => s.balancePollMinutes)
   const musicEnabled = useStore(s => s.musicEnabled)
   const musicVolume = useStore(s => s.musicVolume)
   const musicStyle = useStore(s => s.musicStyle)
@@ -600,6 +618,23 @@ export function TokenQuotaPanel({
     ? (hovered || upgradeFlash ? '' : inputActive ? css.panelDimStrong : css.panelDim)
     : ''
 
+  /** Tooltip for the balance bar: fetch time, breakdown, or failure detail. */
+  const balanceTitle = balance === undefined
+    ? ''
+    : balance.status === 'unconfigured'
+      ? t('balanceUnconfiguredHint')
+      : balance.error !== undefined
+        ? `${t('balanceUpdatedAt').replace('{v}', new Date(balance.fetchedAt).toLocaleTimeString())} — ${balance.error}`
+        : [
+            t('balanceUpdatedAt').replace('{v}', new Date(balance.fetchedAt).toLocaleTimeString()),
+            balance.granted !== undefined
+              ? t('balanceGranted').replace('{v}', `${currencySymbol(balance.currency)}${balance.granted.toFixed(2)}`)
+              : null,
+            balance.toppedUp !== undefined
+              ? t('balanceToppedUp').replace('{v}', `${currencySymbol(balance.currency)}${balance.toppedUp.toFixed(2)}`)
+              : null,
+          ].filter((item): item is string => item !== null).join(' · ')
+
   return (
     <>
     <div
@@ -690,6 +725,40 @@ export function TokenQuotaPanel({
         </div>
       </div>
       <div className={css.body}>
+        {balance !== undefined && balanceEnabled && (
+          <div className={`${css.balanceBar}${balance.status === 'error' || (balance.status === 'ok' && !balance.isAvailable) ? ` ${css.balanceBarError}` : ''}${balance.status === 'unconfigured' ? ` ${css.balanceBarDim}` : ''}${balance.status === 'ok' && balance.isAvailable && balance.total < 5 ? ` ${css.balanceBarLow}` : ''}`}>
+            <span className={css.balanceBarText} title={balanceTitle}>
+              {balance.status === 'unconfigured'
+                ? `⚠ ${t('balanceUnconfigured')}`
+                : balance.status === 'error' && balance.total === 0
+                  ? `⚠ ${t('balanceError')}`
+                  : (
+                    <>
+                      {t('balanceLabel')} {currencySymbol(balance.currency)}{balance.total.toFixed(2)}
+                      {balance.status === 'error' && (
+                        <span className={css.balanceBarBadge}>{t('balanceError')}</span>
+                      )}
+                      {balance.status === 'ok' && !balance.isAvailable && (
+                        <span className={css.balanceBarBadge}>{t('balanceUnavailable')}</span>
+                      )}
+                    </>
+                  )}
+            </span>
+            <button
+              type="button"
+              className={css.balanceBarRefresh}
+              title={t('balanceRefresh')}
+              disabled={balance.status === 'unconfigured' || refreshingBalance}
+              onClick={() => {
+                setRefreshingBalance(true)
+                refreshBalance()
+                window.setTimeout(() => { setRefreshingBalance(false) }, 1500)
+              }}
+            >
+              {refreshingBalance ? '…' : '↻'}
+            </button>
+          </div>
+        )}
         {loading && <div className={css.notice}>{t('loading')}</div>}
         {error !== null && <div className={css.noticeError}>{error}</div>}
         {fullNotice !== null && (
@@ -1060,6 +1129,33 @@ export function TokenQuotaPanel({
               </div>
               {lastCheckResult === 'error' && upgradeError !== null && (
                 <div className={css.checkErrorHint} role="alert">{upgradeError}</div>
+              )}
+            </div>
+            <div className={css.dialogSection}>
+              <div className={css.dialogLabel}>{t('balanceSectionLabel')}</div>
+              <label className={css.checkUpdatesLabel}>
+                <input
+                  type="checkbox"
+                  checked={balanceEnabled}
+                  onChange={(event) => { setBalanceSettings(event.target.checked, balancePollMinutes) }}
+                />
+                <span>{t('balanceEnabledLabel')}</span>
+              </label>
+              <div className={css.dialogHint}>{t('balanceHint').replace('{v}', String(balancePollMinutes))}</div>
+              {balanceEnabled && (
+                <label className={css.checkUpdatesLabel}>
+                  <span>{t('balancePollLabel')}</span>
+                  <select
+                    value={balancePollMinutes}
+                    onChange={(event) => { setBalanceSettings(balanceEnabled, Number(event.target.value)) }}
+                  >
+                    {[1, 5, 15, 30, 60].map(minutes => (
+                      <option key={minutes} value={minutes}>
+                        {t('balancePollMinutes').replace('{v}', String(minutes))}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
             </div>
             </>

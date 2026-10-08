@@ -57,6 +57,48 @@ export type TokenQuotaMusicStyle = typeof TOKEN_QUOTA_MUSIC_STYLES[number]
  */
 export const TOKEN_QUOTA_MAX_NOTES = 5
 
+/** Account-balance display settings (DeepSeek `/user/balance` by default). */
+export interface TokenQuotaBalanceSettings {
+  /** Whether the panel fetches and shows the provider account balance. */
+  enabled: boolean
+  /** How often the balance is refreshed, in minutes. */
+  pollMinutes: number
+}
+
+export const TOKEN_QUOTA_DEFAULT_BALANCE: TokenQuotaBalanceSettings = {
+  enabled: true,
+  pollMinutes: 5,
+}
+
+/** Fetch state of the provider account balance. */
+export type TokenQuotaBalanceStatus = 'ok' | 'unconfigured' | 'error'
+
+/**
+ * One cached provider account balance, shown above the model list. The host
+ * polls the provider's balance endpoint with the harness-stored API key; a
+ * failed fetch keeps the previous value and flips `status` to `'error'`.
+ */
+export interface TokenQuotaBalance {
+  /** Provider route key, e.g. `deepseek`. */
+  provider: string
+  /** Balance currency code reported by the provider (e.g. `CNY`). */
+  currency: string
+  /** Total balance in that currency. */
+  total: number
+  /** Granted (free) balance, when reported. */
+  granted?: number
+  /** Topped-up balance, when reported. */
+  toppedUp?: number
+  /** Whether the provider reports the account as usable. */
+  isAvailable: boolean
+  /** Epoch ms of the successful fetch that produced this value. */
+  fetchedAt: number
+  /** `'ok'` on success; `'unconfigured'` when no API key resolves; `'error'` on failure. */
+  status: TokenQuotaBalanceStatus
+  /** Human-readable failure detail when `status` is `'error'`. */
+  error?: string
+}
+
 /**
  * One floating scratchpad note: a draggable, resizable text window with an
  * editable title. Closed notes keep their content and placement and can be
@@ -169,6 +211,11 @@ export interface TokenQuotaSettings {
    */
   music: TokenQuotaMusicSettings
   /**
+   * Provider account balance shown above the model list: enabled plus how
+   * often the host polls the balance endpoint.
+   */
+  balance: TokenQuotaBalanceSettings
+  /**
    * Floating scratchpad notes owned by the panel. At most
    * {@link TOKEN_QUOTA_MAX_NOTES} are kept; content, title, placement, size
    * and collapsed/closed state all persist here so notes survive a reload.
@@ -238,6 +285,8 @@ export interface TokenQuotaSnapshot {
   upgrade: TokenQuotaUpgrade | null
   /** Error from the most recent update check; `null` = no error (or never checked). */
   upgradeError: string | null
+  /** Cached provider account balance; absent while disabled or before the first fetch. */
+  balance?: TokenQuotaBalance
 }
 
 /** One historical daily usage record, shown in the log dialog. */

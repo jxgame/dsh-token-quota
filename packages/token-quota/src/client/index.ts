@@ -41,8 +41,8 @@ import type {
   TokenQuotaMusicStyle,
   TokenQuotaNote,
   TokenQuotaReset,
-  TokenQuotaSettings,
   TokenQuotaSnapshot,
+  TokenQuotaSettings,
 } from '@jxgame2020/dsh-token-quota/types'
 import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import { createTokenQuotaPanelStore } from './store.ts'
@@ -366,6 +366,13 @@ export function apply(ctx: ClientContext): void {
     bound?.setOrder(Array.isArray(doc?.order) ? doc.order : [])
     bound?.setNotes(normalizeNotes(doc?.notes))
     bound?.setReset(lastReset)
+    const balanceRaw = doc?.balance
+    bound?.setBalanceSettings(
+      balanceRaw?.enabled !== false,
+      typeof balanceRaw?.pollMinutes === 'number'
+        ? Math.max(1, Math.min(120, Math.round(balanceRaw.pollMinutes)))
+        : 5,
+    )
     const musicSettings = musicDefaults(doc?.music)
     lastOnlyCurrentSession = musicSettings.onlyCurrentSession
     music.setEnabled(musicSettings.enabled)
@@ -391,6 +398,7 @@ export function apply(ctx: ClientContext): void {
       bound?.setSnapshot(snapshot)
       bound?.setUpgrade(snapshot.upgrade ?? null)
       bound?.setUpgradeError(snapshot.upgradeError ?? null)
+      bound?.setBalance(snapshot.balance)
       actOnFull(snapshot)
     })
     if (pullCount % 2 === 0) refreshCurrent()
@@ -465,6 +473,26 @@ export function apply(ctx: ClientContext): void {
   /** Persist the floating scratchpad notes (content, title, placement). */
   const saveNotes = (notes: TokenQuotaNote[]): void => {
     void scope.set('notes', notes.slice(0, TOKEN_QUOTA_MAX_NOTES))
+  }
+
+  /** Persist the account-balance display settings. */
+  const setBalanceSettings = (enabled: boolean, pollMinutes: number): void => {
+    bound?.setBalanceSettings(enabled, pollMinutes)
+    void scope.set('balance', { enabled, pollMinutes })
+  }
+
+  /** Ask the Host to refresh the account balance now and adopt the result. */
+  const refreshBalance = (): void => {
+    void fetch('/token-quota/refresh-balance', { method: 'POST' }).then(
+      response => response.ok ? response.json() as Promise<TokenQuotaSnapshot> : undefined,
+      () => undefined,
+    ).then((snapshot) => {
+      if (snapshot === undefined) return
+      bound?.setSnapshot(snapshot)
+      bound?.setUpgrade(snapshot.upgrade ?? null)
+      bound?.setUpgradeError(snapshot.upgradeError ?? null)
+      bound?.setBalance(snapshot.balance)
+    })
   }
 
   const setMusicEnabled = (enabled: boolean): void => {
@@ -597,7 +625,7 @@ export function apply(ctx: ClientContext): void {
       load, setLimit, selectModel, setMonitored, setOnFull, setReset,
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
       setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
-      setModelOrder, saveNotes,
+      setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
     }
   }
 
