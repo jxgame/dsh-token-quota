@@ -28,7 +28,7 @@ import type {
   TokenQuotaNote,
   TokenQuotaReset,
 } from '@jxgame2020/dsh-token-quota/types'
-import { TOKEN_QUOTA_BALANCE_PROVIDERS, TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
+import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
 import { mergeModelRows, reorderKeys } from './store.ts'
 import type { TokenQuotaKey } from './locales.ts'
@@ -645,16 +645,17 @@ export function TokenQuotaPanel({
     return list
   }, [groups])
 
-  // Balance by provider key, built from the snapshot (status ok/error/unconfigured)
-  // plus a client-side "unsupported" sentinel for providers the Host does not
-  // yet know how to query, and "loading" for supported ones not yet returned.
+  // Balance by provider key. The Host returns a balances entry for every
+  // provider it can query (DeepSeek-family), so a directory provider with no
+  // entry is "not integrated for query" — except during the very first fetch,
+  // when the whole list is still empty and reads as "loading" instead.
   const balanceByProvider = useMemo(() => {
     const map = new Map<string, TokenQuotaBalance | 'unsupported' | 'loading'>()
     for (const provider of providers) {
       const bal = balances.find(b => b.provider === provider)
       if (bal !== undefined) {
         map.set(provider, bal)
-      } else if (TOKEN_QUOTA_BALANCE_PROVIDERS.includes(provider)) {
+      } else if (balances.length === 0) {
         map.set(provider, 'loading')
       } else {
         map.set(provider, 'unsupported')

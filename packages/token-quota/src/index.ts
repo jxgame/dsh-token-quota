@@ -330,14 +330,19 @@ function usageTokens(usage: TokenUsage): number {
  * per-model limits through the `token-quota` settings namespace.
  */
 /**
- * Providers the host can query for account balance, keyed by route key. Each
- * entry names the credential reference (environment-variable name), the
- * balance endpoint base, and the optional `*_BASE_URL` override variable.
- * Directory providers outside this map render as "not integrated for query".
+ * One provider the host can query for account balance, discovered from the
+ * model directory rather than hard-coded. `keyEnv` is the credential reference
+ * (environment-variable name) that provider declared as its `apiKeyEnv`, and
+ * `baseURL` is the provider's own endpoint base.
  */
-const BALANCE_SOURCES: Readonly<Record<string, { keyEnv: string; baseURL: string; baseEnv?: string }>> = {
-  deepseek: { keyEnv: 'DEEPSEEK_API_KEY', baseURL: 'https://api.deepseek.com', baseEnv: 'DEEPSEEK_BASE_URL' },
+interface BalanceSource {
+  provider: string
+  keyEnv: string
+  baseURL: string
 }
+
+/** DeepSeek's public API host; used to recognise DeepSeek-family providers. */
+const DEEPSEEK_BALANCE_HOST = 'api.deepseek.com'
 
 export class TokenQuotaService extends Service {
   static Config: z<TokenQuotaConfig> = z.object({
@@ -612,7 +617,7 @@ export class TokenQuotaService extends Service {
           } catch {
             // Malformed body: fall back to refreshing everything.
           }
-          const task = provider !== undefined && provider in BALANCE_SOURCES
+          const task = provider !== undefined
             ? this.refreshProviderBalance(provider)
             : this.refreshAllBalances()
           void task.finally(() => {
@@ -795,11 +800,71 @@ export class TokenQuotaService extends Service {
     schedule()
   }
 
-  /** Refresh every provider the host knows how to query. */
+  /** Refresh every DeepSeek-family provider found in the model directory. */
   private refreshAllBalances(): Promise<void> {
     return Promise.all(
-      Object.keys(BALANCE_SOURCES).map(provider => this.refreshProviderBalance(provider)),
+      [...this.discoverBalanceSources().values()]
+        .map(source => this.refreshProviderBalance(source.provider, source)),
     ).then(() => undefined)
+  }
+
+  /**
+   * Discover every provider in the model directory that looks like DeepSeek,
+   * together with its own credential reference and endpoint base. This is what
+   * decides which providers are queried: a provider qualifies when its base URL
+   * points at DeepSeek's API host or its credential reference is named with the
+   * `DEEPSEEK` prefix, and it must declare an `apiKeyEnv`.
+   */
+  private discoverBalanceSources(): Map<string, BalanceSource> {
+    const found = new Map<string, BalanceSource>()
+    const llm = this.ctx.get('llm') as {
+      listConfigurableProviders?: () => Array<{
+        provider: string
+        settingsNs: string
+        settingsPath?: readonly string[]
+      }>
+    } | undefined
+    const settings = this.ctx.get('settings') as { get: (ns: string) => unknown } | undefined
+    const fallback = (): BalanceSource => ({
+      provider: 'deepseek',
+      keyEnv: 'DEEPSEEK_API_KEY',
+      baseURL: process.env.DEEPSEEK_BASE_URL ?? `https://${DEEPSEEK_BALANCE_HOST}`,
+    })
+    if (llm?.listConfigurableProviders === undefined) {
+      found.set('deepseek', fallback())
+      return found
+    }
+    for (const entry of llm.listConfigurableProviders()) {
+      try {
+        let profile: unknown = settings?.get(entry.settingsNs)
+        for (const segment of entry.settingsPath ?? []) {
+          profile = profile !== null && typeof profile === 'object'
+            ? (profile as Record<string, unknown>)[segment]
+            : undefined
+        }
+        if (profile === null || typeof profile !== 'object') continue
+        const record = profile as Record<string, unknown>
+        const keyEnv = typeof record.apiKeyEnv === 'string' && record.apiKeyEnv !== ''
+          ? record.apiKeyEnv
+          : undefined
+        const baseURL = typeof record.baseURL === 'string' && record.baseURL !== ''
+          ? record.baseURL
+          : undefined
+        const isDeepSeek = (baseURL !== undefined && baseURL.includes(DEEPSEEK_BALANCE_HOST))
+          || (keyEnv !== undefined && keyEnv.startsWith('DEEPSEEK'))
+          || entry.provider.startsWith('deepseek')
+        if (!isDeepSeek || keyEnv === undefined) continue
+        found.set(entry.provider, {
+          provider: entry.provider,
+          keyEnv,
+          baseURL: baseURL ?? `https://${DEEPSEEK_BALANCE_HOST}`,
+        })
+      } catch {
+        // Malformed provider entry — skip it and keep the others.
+      }
+    }
+    if (found.size === 0) found.set('deepseek', fallback())
+    return found
   }
 
   /**
@@ -808,9 +873,9 @@ export class TokenQuotaService extends Service {
    * environment as a fallback, so the Models page key is used with nothing to
    * type. A failed fetch keeps the previous value and marks it as an error.
    */
-  private async refreshProviderBalance(provider: string): Promise<void> {
-    const source = BALANCE_SOURCES[provider]
-    if (source === undefined) return
+  private async refreshProviderBalance(provider: string, source?: BalanceSource): Promise<void> {
+    const resolved = source ?? this.discoverBalanceSources().get(provider)
+    if (resolved === undefined) return
     const existing = this.balanceFetches.get(provider)
     if (existing !== undefined) return existing
     const run = async (): Promise<void> => {
@@ -821,12 +886,12 @@ export class TokenQuotaService extends Service {
       let key: string | undefined
       if (credentials !== undefined) {
         try {
-          key = (await credentials.resolve(source.keyEnv))?.value
+          key = (await credentials.resolve(resolved.keyEnv))?.value
         } catch {
           // Seam unreachable: fall through to the environment.
         }
       }
-      if (key === undefined || key === '') key = process.env[source.keyEnv]
+      if (key === undefined || key === '') key = process.env[resolved.keyEnv]
       if (key === undefined || key === '') {
         this.balances.set(provider, {
           provider,
@@ -838,9 +903,7 @@ export class TokenQuotaService extends Service {
         })
         return
       }
-      const base = source.baseEnv !== undefined
-        ? (process.env[source.baseEnv] ?? source.baseURL)
-        : source.baseURL
+      const base = resolved.baseURL
       try {
         const controller = new AbortController()
         const timer = setTimeout(() => { controller.abort() }, 10_000)

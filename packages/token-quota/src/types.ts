@@ -70,13 +70,6 @@ export const TOKEN_QUOTA_DEFAULT_BALANCE: TokenQuotaBalanceSettings = {
   pollMinutes: 5,
 }
 
-/**
- * Provider route keys the host knows how to query for account balance. A
- * directory provider outside this list renders as "not integrated for query"
- * in the balance window.
- */
-export const TOKEN_QUOTA_BALANCE_PROVIDERS: readonly string[] = ['deepseek']
-
 /** Fetch state of the provider account balance. */
 export type TokenQuotaBalanceStatus = 'ok' | 'unconfigured' | 'error'
 
