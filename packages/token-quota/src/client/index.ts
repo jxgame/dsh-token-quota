@@ -397,7 +397,10 @@ export function apply(ctx: ClientContext): void {
     bound?.setMusicVolume(musicSettings.volume)
     bound?.setMusicStyle(musicSettings.style)
     bound?.setMusicOnlyCurrentSession(musicSettings.onlyCurrentSession)
-    bound?.setTranscribeSettings(transcribeDefaults(doc?.transcribe))
+    const transcribeRaw = doc?.transcribe
+    const resolvedTranscribe = transcribeDefaults(transcribeRaw)
+    applyTranscribe(resolvedTranscribe)
+    bound?.setTranscribeSettings(resolvedTranscribe)
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
         if (!response.ok) {
@@ -498,7 +501,32 @@ export function apply(ctx: ClientContext): void {
   }
 
   /** Persist the voice transcription settings and mirror them into the store. */
+
+  // --- Transcription settings source (independent of the panel store, so the
+  //     mic entry — mounted in the session-scoped conversation.input.overlay
+  //     slot — can subscribe without sharing the panel's root-scoped store
+  //     instance (which would fork state across scopes). ---
+  let currentTranscribe: TokenQuotaTranscribeSettings = TOKEN_QUOTA_DEFAULT_TRANSCRIBE
+  const transcribeSubscribers = new Set<() => void>()
+  const emitTranscribe = (): void => { for (const fn of transcribeSubscribers) fn() }
+  const subscribeTranscribe = (cb: () => void): () => void => {
+    transcribeSubscribers.add(cb)
+    return () => { transcribeSubscribers.delete(cb) }
+  }
+  const getTranscribe = (): TokenQuotaTranscribeSettings => currentTranscribe
+  const applyTranscribe = (settings: TokenQuotaTranscribeSettings): void => {
+    if (
+      settings.enabled === currentTranscribe.enabled
+      && settings.baseURL === currentTranscribe.baseURL
+      && settings.apiKeyEnv === currentTranscribe.apiKeyEnv
+      && settings.model === currentTranscribe.model
+    ) return
+    currentTranscribe = settings
+    emitTranscribe()
+  }
+
   const setTranscribeSettings = (settings: TokenQuotaTranscribeSettings): void => {
+    applyTranscribe(settings)
     bound?.setTranscribeSettings(settings)
     void scope.set('transcribe', settings)
   }
@@ -691,16 +719,21 @@ export function apply(ctx: ClientContext): void {
   // transcription is enabled in settings; a press starts recording, a second
   // press stops and sends the audio to the Host for transcription, then the
   // recognised text is appended to the composer.
+  // NOTE: This entry is scoped to a session (not root), so it cannot share the
+  // panel's root-scoped store handle without forking a separate per-session
+  // instance. Instead it subscribes to a tiny transcribe-only observable and
+  // receives the locale-bound `t` function through injection.
   ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
     name: 'conversation.input.overlay',
     id: 'token-quota-mic',
     order: 100,
     label: () => t('transcribeTitle'),
-    store,
-    locale: NS,
-    inject: (_sessionId: SessionId, micActions: BoundActions<typeof store>): TokenQuotaMicInjected => {
-      bound = micActions
-      return { transcribe, setTranscribeSettings }
-    },
+    inject: (_sessionId: SessionId): TokenQuotaMicInjected => ({
+      transcribe,
+      setTranscribeSettings,
+      subscribeTranscribe,
+      getTranscribe,
+      t: t as (key: string) => string,
+    }),
   }, TokenQuotaMic))
 }
