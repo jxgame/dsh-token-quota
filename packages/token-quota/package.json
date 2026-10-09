@@ -43,7 +43,8 @@
   },
   "scripts": {
     "bundle": "tsdown",
-    "watch": "tsdown --watch"
+    "watch": "tsdown --watch",
+    "smoke": "node tools/smoke-client.mjs"
   },
   "files": [
     "lib/index.js",
