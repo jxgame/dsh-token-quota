@@ -229,6 +229,31 @@ if (problems.length > 0) {
   process.exit(1)
 }
 
+// ------------------------------------------- hook-order guard (panel source)
+// An early return placed above a hook makes React throw "Rendered fewer hooks
+// than expected" the moment the flag flips; the slot error boundary then
+// swallows the whole entry and the panel simply vanishes until a reload. That
+// shipped once — the 收起 (collapse) button did exactly this. A single render
+// cannot catch it (it only fires on a re-render), so guard it statically.
+const panelSource = readFileSync(resolve(here, '..', 'src/client/TokenQuotaPanel.tsx'), 'utf8')
+const panelLines = panelSource.split('\n')
+const HOOK_CALL = /\buse(?:State|Effect|LayoutEffect|Memo|Ref|Callback|Reducer|Context|SyncExternalStore)\s*\(/
+const collapsedAt = panelLines.findIndex(line => line.includes('if (collapsed) {'))
+if (collapsedAt < 0) {
+  // Fail loud rather than silently skipping: a renamed marker would retire the
+  // guard without anyone noticing.
+  console.error('FAIL: hook-order guard lost its marker ("if (collapsed) {") in TokenQuotaPanel.tsx')
+  process.exit(1)
+}
+{
+  const offenders = panelLines.slice(collapsedAt + 1).filter(line => HOOK_CALL.test(line))
+  if (offenders.length > 0) {
+    console.error('FAIL: hook call after the collapsed early-return (React hook-order crash):')
+    for (const line of offenders) console.error('   ', line.trim())
+    process.exit(1)
+  }
+}
+
 console.log(`PASS: ${factory.id}`)
 console.log(`  entries: ${registrations.map(r => `${r.options.id}@${r.scope}`).join(', ')}`)
 console.log(`  effects installed: ${effects.length}`)

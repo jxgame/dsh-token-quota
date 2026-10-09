@@ -677,28 +677,6 @@ export function TokenQuotaPanel({
     return () => { cancelled = true }
   }, [logOpen, actions])
 
-  if (collapsed) {
-    return (
-      <div
-        className={css.tab}
-        role="button"
-        tabIndex={0}
-        title={t('expandHint')}
-        aria-label={t('expandHint')}
-        onClick={() => { setCollapsed(false) }}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault()
-            setCollapsed(false)
-          }
-        }}
-      >
-        <span className={css.tabIcon} aria-hidden="true">▸</span>
-        <span className={css.tabLabel}>{t('expand')}</span>
-      </div>
-    )
-  }
-
   const openSettings = (): void => {
     actions.setDialogOpen(true)
   }
@@ -894,6 +872,33 @@ export function TokenQuotaPanel({
   const panelDimClass = dimWhenIdle
     ? (hovered || upgradeFlash ? '' : inputActive ? css.panelDimStrong : css.panelDim)
     : ''
+
+  // Collapsed tab. This early return MUST sit below every hook: React requires
+  // the hook count to be identical across renders, and returning above the
+  // balance/timestamp memos made it drop on collapse — React threw "Rendered
+  // fewer hooks than expected", the slot error boundary swallowed the entry,
+  // and the panel simply vanished until a page reload reset `collapsed`.
+  if (collapsed) {
+    return (
+      <div
+        className={css.tab}
+        role="button"
+        tabIndex={0}
+        title={t('expandHint')}
+        aria-label={t('expandHint')}
+        onClick={() => { setCollapsed(false) }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            setCollapsed(false)
+          }
+        }}
+      >
+        <span className={css.tabIcon} aria-hidden="true">▸</span>
+        <span className={css.tabLabel}>{t('expand')}</span>
+      </div>
+    )
+  }
 
   return (
     <>
