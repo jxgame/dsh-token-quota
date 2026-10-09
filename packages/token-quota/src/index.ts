@@ -338,20 +338,126 @@ function usageTokens(usage: TokenUsage): number {
  * Mount it beside the other rows (`@jxgame2020/dsh-token-quota`) and write
  * per-model limits through the `token-quota` settings namespace.
  */
+/** Balance-endpoint families the host knows how to query. */
+type BalanceKind = 'deepseek' | 'teamorouter'
+
 /**
  * One provider the host can query for account balance, discovered from the
  * model directory rather than hard-coded. `keyEnv` is the credential reference
  * (environment-variable name) that provider declared as its `apiKeyEnv`, and
- * `baseURL` is the provider's own endpoint base.
+ * `baseURL` is the provider's own endpoint base. `kind` selects the balance
+ * endpoint path and the response shape.
  */
 interface BalanceSource {
   provider: string
   keyEnv: string
   baseURL: string
+  kind: BalanceKind
 }
 
 /** DeepSeek's public API host; used to recognise DeepSeek-family providers. */
 const DEEPSEEK_BALANCE_HOST = 'api.deepseek.com'
+/** TeamoRouter's host; its model and billing endpoints share this domain. */
+const TEAMOROUTER_HOST = 'teamorouter.cn'
+
+/** Fallback currency per family, used before the first successful fetch. */
+const BALANCE_DEFAULT_CURRENCY: Record<BalanceKind, string> = {
+  deepseek: 'CNY',
+  teamorouter: 'USD',
+}
+
+/**
+ * Recognise which balance family a provider belongs to, from its endpoint, its
+ * credential reference, or its route id. Returns undefined for providers whose
+ * balance this plugin cannot query.
+ * @param provider - registered provider route id.
+ * @param keyEnv - the provider's declared `apiKeyEnv`, when it has one.
+ * @param baseURL - the provider's endpoint base, when it declares one.
+ * @returns the matching family, or undefined.
+ */
+function balanceKindOf(
+  provider: string,
+  keyEnv: string | undefined,
+  baseURL: string | undefined,
+): BalanceKind | undefined {
+  const host = (baseURL ?? '').toLowerCase()
+  const key = (keyEnv ?? '').toUpperCase()
+  const id = provider.toLowerCase()
+  if (host.includes(DEEPSEEK_BALANCE_HOST) || key.startsWith('DEEPSEEK') || id.startsWith('deepseek')) {
+    return 'deepseek'
+  }
+  if (host.includes(TEAMOROUTER_HOST) || key.includes('TEAMO') || id.includes('teamo')) {
+    return 'teamorouter'
+  }
+  return undefined
+}
+
+/**
+ * The balance endpoint for one family. TeamoRouter serves billing from the apex
+ * host while its model endpoint lives on the `api.` subdomain, so the host is
+ * rewritten rather than concatenated.
+ * @param kind - balance family.
+ * @param baseURL - the provider's model endpoint base.
+ * @returns the absolute balance URL.
+ */
+function balanceURLOf(kind: BalanceKind, baseURL: string): string {
+  const base = baseURL.replace(/\/+$/, '')
+  if (kind === 'teamorouter') {
+    return `${base.replace('//api.teamorouter.cn', '//teamorouter.cn')}/billing/balance`
+  }
+  return `${base}/user/balance`
+}
+
+/** Read a number out of a wire field that may be a string or a number. */
+function balanceNum(value: unknown, fallback = 0): number {
+  const n = typeof value === 'number' ? value
+    : typeof value === 'string' && value !== '' ? Number(value)
+    : NaN
+  return Number.isFinite(n) ? n : fallback
+}
+
+/** One parsed balance payload, normalised across families. */
+interface ParsedBalance {
+  currency: string
+  total: number
+  granted?: number
+  toppedUp?: number
+  isAvailable: boolean
+}
+
+/**
+ * DeepSeek: `{ is_available, balance_infos: [{ currency, total_balance,
+ * granted_balance, topped_up_balance }] }`.
+ */
+function parseDeepseekBalance(data: unknown): ParsedBalance {
+  const record = (data ?? {}) as { is_available?: unknown; balance_infos?: unknown }
+  const first = Array.isArray(record.balance_infos)
+    ? record.balance_infos[0] as Record<string, unknown> | undefined
+    : undefined
+  return {
+    currency: typeof first?.currency === 'string' && first.currency !== '' ? first.currency : 'CNY',
+    total: balanceNum(first?.total_balance),
+    granted: balanceNum(first?.granted_balance),
+    toppedUp: balanceNum(first?.topped_up_balance),
+    isAvailable: record.is_available !== false,
+  }
+}
+
+/**
+ * TeamoRouter: `{ balance: { value: "85.320000", currency: "USD" } }`. The
+ * account is identified by the API key, so there is no availability flag.
+ */
+function parseTeamorouterBalance(data: unknown): ParsedBalance {
+  const record = (data ?? {}) as { balance?: unknown }
+  const balance = record.balance !== null && typeof record.balance === 'object'
+    ? record.balance as { value?: unknown; currency?: unknown }
+    : undefined
+  return {
+    currency: typeof balance?.currency === 'string' && balance.currency !== '' ? balance.currency : 'USD',
+    total: balanceNum(balance?.value),
+    isAvailable: true,
+  }
+}
 
 export class TokenQuotaService extends Service {
   static Config: z<TokenQuotaConfig> = z.object({
@@ -857,11 +963,11 @@ export class TokenQuotaService extends Service {
   }
 
   /**
-   * Discover every provider in the model directory that looks like DeepSeek,
-   * together with its own credential reference and endpoint base. This is what
-   * decides which providers are queried: a provider qualifies when its base URL
-   * points at DeepSeek's API host or its credential reference is named with the
-   * `DEEPSEEK` prefix, and it must declare an `apiKeyEnv`.
+   * Discover every provider in the model directory whose balance this plugin
+   * can query, together with its own credential reference and endpoint base.
+   * This is what decides which providers are queried: a provider qualifies when
+   * its base URL, credential reference, or route id matches a supported family
+   * (see {@link balanceKindOf}), and it must declare an `apiKeyEnv`.
    */
   private discoverBalanceSources(): Map<string, BalanceSource> {
     const found = new Map<string, BalanceSource>()
@@ -877,6 +983,7 @@ export class TokenQuotaService extends Service {
       provider: 'deepseek',
       keyEnv: 'DEEPSEEK_API_KEY',
       baseURL: process.env.DEEPSEEK_BASE_URL ?? `https://${DEEPSEEK_BALANCE_HOST}`,
+      kind: 'deepseek',
     })
     if (llm?.listConfigurableProviders === undefined) {
       found.set('deepseek', fallback())
@@ -898,14 +1005,13 @@ export class TokenQuotaService extends Service {
         const baseURL = typeof record.baseURL === 'string' && record.baseURL !== ''
           ? record.baseURL
           : undefined
-        const isDeepSeek = (baseURL !== undefined && baseURL.includes(DEEPSEEK_BALANCE_HOST))
-          || (keyEnv !== undefined && keyEnv.startsWith('DEEPSEEK'))
-          || entry.provider.startsWith('deepseek')
-        if (!isDeepSeek || keyEnv === undefined) continue
+        const kind = balanceKindOf(entry.provider, keyEnv, baseURL)
+        if (kind === undefined || keyEnv === undefined) continue
         found.set(entry.provider, {
           provider: entry.provider,
           keyEnv,
-          baseURL: baseURL ?? `https://${DEEPSEEK_BALANCE_HOST}`,
+          baseURL: baseURL ?? (kind === 'deepseek' ? `https://${DEEPSEEK_BALANCE_HOST}` : `https://${TEAMOROUTER_HOST}`),
+          kind,
         })
       } catch {
         // Malformed provider entry — skip it and keep the others.
@@ -943,7 +1049,7 @@ export class TokenQuotaService extends Service {
       if (key === undefined || key === '') {
         this.balances.set(provider, {
           provider,
-          currency: 'CNY',
+          currency: BALANCE_DEFAULT_CURRENCY[resolved.kind],
           total: 0,
           isAvailable: false,
           fetchedAt: Date.now(),
@@ -951,13 +1057,12 @@ export class TokenQuotaService extends Service {
         })
         return
       }
-      const base = resolved.baseURL
       try {
         const controller = new AbortController()
         const timer = setTimeout(() => { controller.abort() }, 10_000)
         let res: Response
         try {
-          res = await fetch(`${base}/user/balance`, {
+          res = await fetch(balanceURLOf(resolved.kind, resolved.baseURL), {
             headers: { authorization: `Bearer ${key}`, accept: 'application/json' },
             signal: controller.signal,
           })
@@ -965,36 +1070,27 @@ export class TokenQuotaService extends Service {
           clearTimeout(timer)
         }
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as {
-          is_available?: unknown
-          balance_infos?: unknown
-        } | null
-        const first = Array.isArray(data?.balance_infos)
-          ? (data.balance_infos[0] as { currency?: unknown; total_balance?: unknown; granted_balance?: unknown; topped_up_balance?: unknown } | undefined)
-          : undefined
-        const num = (value: unknown): number => {
-          const n = typeof value === 'number' ? value
-            : typeof value === 'string' && value !== '' ? Number(value)
-            : NaN
-          return Number.isFinite(n) ? n : 0
-        }
-        this.balances.set(provider, {
+        const data = await res.json() as unknown
+        const parsed = resolved.kind === 'teamorouter'
+          ? parseTeamorouterBalance(data)
+          : parseDeepseekBalance(data)
+        const next: TokenQuotaBalance = {
           provider,
-          currency: typeof first?.currency === 'string' && first.currency !== ''
-            ? first.currency
-            : 'CNY',
-          total: num(first?.total_balance),
-          granted: num(first?.granted_balance),
-          toppedUp: num(first?.topped_up_balance),
-          isAvailable: data?.is_available !== false,
+          currency: parsed.currency,
+          total: parsed.total,
+          isAvailable: parsed.isAvailable,
           fetchedAt: Date.now(),
           status: 'ok',
-        })
+        }
+        // Only set the optional detail fields when the family reports them.
+        if (parsed.granted !== undefined) next.granted = parsed.granted
+        if (parsed.toppedUp !== undefined) next.toppedUp = parsed.toppedUp
+        this.balances.set(provider, next)
       } catch (error) {
         const previous = this.balances.get(provider)
         const next: TokenQuotaBalance = {
           provider,
-          currency: previous?.currency ?? 'CNY',
+          currency: previous?.currency ?? BALANCE_DEFAULT_CURRENCY[resolved.kind],
           total: previous?.total ?? 0,
           isAvailable: false,
           fetchedAt: previous?.fetchedAt ?? Date.now(),

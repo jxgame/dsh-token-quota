@@ -24,8 +24,8 @@ Zero changes to the DSH core repo: no core file is modified, no official bundle 
   **Usage log**: one row per model per day (date / model / usage), independent of the monitored set.
 - **浮窗面板**：实时显示各模型「今日已用 / 上限」，行内一键「选择」切换模型、`⚙` 折叠设置单模型限额；行可拖拽排序；面板闲置时半透明化。
   **Floating panel**: live used/limit per model, a one-click Select button per row, a folded `⚙` per-model limit editor, drag-to-reorder rows, and it dims while idle.
-- **账户余额窗口**：面板笔记行右侧的 ¥ 按钮打开「账户余额」窗口（贴合面板左缘），按提供方列出可用/总额，可排序、整批或逐条手动刷新，显示最近刷新时间（`Last: MM-dd HH:mm:ss`）；自动按设定的分钟数轮询；支持未配置 KEY、网络失败、未接入查询等状态。
-  **Account balance window**: the ¥ button on the panel's notes row opens a balance window docked to the panel's left edge, listing available/total per provider with sortable columns, batch or per-row manual refresh, and a last-fetch time line (`Last: MM-dd HH:mm:ss`); auto-polls at a configured interval and reports states like unconfigured key, network failure, or no balance endpoint.
+- **账户余额窗口**：面板笔记行右侧的 ¥ 按钮打开「账户余额」窗口（贴合面板左缘），按提供方列出可用/总额，可排序、整批或逐条手动刷新，显示最近刷新时间（`Last: MM-dd HH:mm:ss`）；自动按设定的分钟数轮询；支持未配置 KEY、网络失败、未接入查询等状态。余额接口按各提供方自身的配置自动识别，目前支持 **DeepSeek**（`/user/balance`）与 **TeamoRouter**（`teamorouter.cn/v1/billing/balance`）两家。
+  **Account balance window**: the ¥ button on the panel's notes row opens a balance window docked to the panel's left edge, listing available/total per provider with sortable columns, batch or per-row manual refresh, and a last-fetch time line (`Last: MM-dd HH:mm:ss`); auto-polls at a configured interval and reports states like unconfigured key, network failure, or no balance endpoint. Each provider's endpoint is recognised from its own configuration; **DeepSeek** (`/user/balance`) and **TeamoRouter** (`teamorouter.cn/v1/billing/balance`) are supported today.
 - **悬停切换额度/余额**：支持余额查询的提供方，鼠标悬停某模型行时该行在「额度」与「余额」间每 3 秒翻转显示；若余额快照超过 5 分钟未刷新，悬停时立即触发刷新。
   **Hover flip quota/balance**: hovering a row of a provider with balance support toggles between quota and balance every 3 seconds; a stale balance (fetched > 5 min ago) refreshes immediately on hover.
 - **音乐设置**：宿主行为（请求开始、工具调用、回合结束）驱动的环境音乐，Web Audio 或外接 MIDI 输出，可调音量与曲风，可只跟随当前会话。
