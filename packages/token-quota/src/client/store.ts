@@ -20,6 +20,7 @@ import type {
   TokenQuotaReset,
   TokenQuotaSnapshot,
   TokenQuotaEntry,
+  TokenQuotaTranscribeSettings,
   TokenQuotaUpgrade,
 } from '@jxgame2020/dsh-token-quota/types'
 
@@ -96,6 +97,8 @@ export interface TokenQuotaPanelState {
   musicVolume: number
   musicStyle: TokenQuotaMusicStyle
   musicOnlyCurrentSession: boolean
+  /** Voice transcription settings (mirrored from the settings document). */
+  transcribe: TokenQuotaTranscribeSettings
   /** Latest upgrade availability from the Host; null = up to date or unknown. */
   upgrade: TokenQuotaUpgrade | null
   /** Whether the one-shot upgrade banner was dismissed for the current latest version. */
@@ -151,6 +154,8 @@ export type TokenQuotaPanelActions = {
   setMusicVolume: (d: TokenQuotaPanelState, volume: number) => void
   setMusicStyle: (d: TokenQuotaPanelState, style: TokenQuotaMusicStyle) => void
   setMusicOnlyCurrentSession: (d: TokenQuotaPanelState, only: boolean) => void
+  /** Adopt the voice transcription settings. */
+  setTranscribeSettings: (d: TokenQuotaPanelState, settings: TokenQuotaTranscribeSettings) => void
   setUpgrade: (d: TokenQuotaPanelState, upgrade: TokenQuotaUpgrade | null) => void
   setUpgradeDismissed: (d: TokenQuotaPanelState, dismissed: boolean) => void
   setCheckingUpdates: (d: TokenQuotaPanelState, checking: boolean) => void
@@ -195,6 +200,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       musicVolume: 0.5,
       musicStyle: 'pentatonic',
       musicOnlyCurrentSession: true,
+      transcribe: { enabled: false, baseURL: 'https://api.siliconflow.cn/v1', apiKeyEnv: 'SILICONFLOW_API_KEY', model: 'XingChenAGI/XingChenASR-V3.2-Ultra' },
       upgrade: null,
       upgradeDismissed: false,
       checkingUpdates: false,
@@ -228,6 +234,7 @@ export function createTokenQuotaPanelStore(): EngineStoreHandle<TokenQuotaPanelS
       setMusicVolume: (d, volume) => { d.musicVolume = volume },
       setMusicStyle: (d, style) => { d.musicStyle = style },
       setMusicOnlyCurrentSession: (d, only) => { d.musicOnlyCurrentSession = only },
+      setTranscribeSettings: (d, settings) => { d.transcribe = settings },
       setUpgrade: (d, upgrade) => {
         // Guard against host/client version skew (e.g. the host process still
         // runs an older bundle after an upgrade): when the reported "latest"

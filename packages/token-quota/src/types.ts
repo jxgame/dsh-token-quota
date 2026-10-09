@@ -70,6 +70,30 @@ export const TOKEN_QUOTA_DEFAULT_BALANCE: TokenQuotaBalanceSettings = {
   pollMinutes: 5,
 }
 
+/**
+ * Voice transcription settings: when enabled the browser shows a mic button
+ * inside the chat composer; a press records the voice, a second press stops
+ * and sends the audio to an OpenAI-compatible `/audio/transcriptions`
+ * endpoint, and the returned text is inserted into the composer.
+ */
+export interface TokenQuotaTranscribeSettings {
+  /** Whether the mic button appears in the composer and transcription is active. */
+  enabled: boolean
+  /** API base URL of the OpenAI-compatible transcription endpoint. */
+  baseURL: string
+  /** Credential reference (environment-variable name) holding the API key. */
+  apiKeyEnv: string
+  /** Speech-to-text model name sent as the `model` field. */
+  model: string
+}
+
+export const TOKEN_QUOTA_DEFAULT_TRANSCRIBE: TokenQuotaTranscribeSettings = {
+  enabled: false,
+  baseURL: 'https://api.siliconflow.cn/v1',
+  apiKeyEnv: 'SILICONFLOW_API_KEY',
+  model: 'XingChenAGI/XingChenASR-V3.2-Ultra',
+}
+
 /** Fetch state of the provider account balance. */
 export type TokenQuotaBalanceStatus = 'ok' | 'unconfigured' | 'error'
 
@@ -215,6 +239,11 @@ export interface TokenQuotaSettings {
    * often the host polls the balance endpoint.
    */
   balance: TokenQuotaBalanceSettings
+  /**
+   * Voice transcription: mic in the composer plus the OpenAI-compatible
+   * endpoint used to turn a recording into text. Disabled by default.
+   */
+  transcribe: TokenQuotaTranscribeSettings
   /**
    * Floating scratchpad notes owned by the panel. At most
    * {@link TOKEN_QUOTA_MAX_NOTES} are kept; content, title, placement, size

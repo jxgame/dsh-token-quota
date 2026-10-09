@@ -61,6 +61,7 @@ import {
   TOKEN_QUOTA_DEFAULT_MUSIC,
   TOKEN_QUOTA_MAX_NOTES,
   TOKEN_QUOTA_DEFAULT_BALANCE,
+  TOKEN_QUOTA_DEFAULT_TRANSCRIBE,
 } from './types.ts'
 import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
 
@@ -266,6 +267,14 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
     enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_BALANCE.enabled),
     pollMinutes: z.number().min(1).max(120).default(TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes),
   }).default({ ...TOKEN_QUOTA_DEFAULT_BALANCE }),
+  // Voice transcription: the browser records and the host forwards the audio
+  // to an OpenAI-compatible endpoint.
+  transcribe: z.object({
+    enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled),
+    baseURL: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL),
+    apiKeyEnv: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv),
+    model: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE }),
 })
 
 /** Serialized counter file shape. */
@@ -360,7 +369,7 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE } })
+  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE }, transcribe: { ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE } })
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -397,6 +406,8 @@ export class TokenQuotaService extends Service {
   private disposeRouteClear: (() => void) | undefined
   /** Disposer for the optional balance-refresh route (`POST /token-quota/refresh-balance`). */
   private disposeRouteBalance: (() => void) | undefined
+  /** Disposer for the voice transcription route (`POST /token-quota/transcribe`). */
+  private disposeRouteTranscribe: (() => void) | undefined
   /** Disposer for the optional music-event route (`GET /token-quota/events`, SSE). */
   private disposeRouteEvents: (() => void) | undefined
   /** Live SSE subscribers receiving streamed music actions. */
@@ -442,6 +453,18 @@ export class TokenQuotaService extends Service {
               pollMinutes: typeof doc.balance?.pollMinutes === 'number'
                 ? Math.max(1, Math.min(120, Math.round(doc.balance.pollMinutes)))
                 : TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes,
+            },
+            transcribe: {
+              enabled: doc.transcribe?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
+              baseURL: typeof doc.transcribe?.baseURL === 'string' && doc.transcribe.baseURL !== ''
+                ? doc.transcribe.baseURL.replace(/\/+$/, '')
+                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL,
+              apiKeyEnv: typeof doc.transcribe?.apiKeyEnv === 'string' && doc.transcribe.apiKeyEnv !== ''
+                ? doc.transcribe.apiKeyEnv
+                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv,
+              model: typeof doc.transcribe?.model === 'string' && doc.transcribe.model !== ''
+                ? doc.transcribe.model
+                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
             },
             notes: Array.isArray(doc.notes)
               ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES).flatMap((note) => {
@@ -626,6 +649,31 @@ export class TokenQuotaService extends Service {
             res.end(body)
           })
         })
+      },
+    })
+    this.disposeRouteTranscribe = server.register({
+      kind: 'exact',
+      path: '/token-quota/transcribe',
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405); res.end()
+          return
+        }
+        void this.handleTranscribe(req).then(
+          (result) => {
+            if (result.ok) {
+              res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+              res.end(JSON.stringify({ text: result.text }))
+            } else {
+              res.writeHead(result.status)
+              res.end(result.message)
+            }
+          },
+          (error) => {
+            res.writeHead(500)
+            res.end(error instanceof Error ? error.message : String(error))
+          },
+        )
       },
     })
     this.disposeRouteClear = server.register({
@@ -963,6 +1011,79 @@ export class TokenQuotaService extends Service {
     const promise = run().finally(() => { this.balanceFetches.delete(provider) })
     this.balanceFetches.set(provider, promise)
     return promise
+  }
+
+  /**
+   * Forward a recorded audio blob to the configured OpenAI-compatible
+   * `/audio/transcriptions` endpoint and return the recognised text. The API
+   * key resolves through the credential seam (Models page) with an environment
+   * fallback; the request body is the raw audio and the content type carries
+   * the filename for the multipart form.
+   */
+  private async handleTranscribe(req: import('node:http').IncomingMessage): Promise<{ ok: true, text: string } | { ok: false, status: number, message: string }> {
+    const settings = this.settingsSource().transcribe
+    if (!settings.enabled) {
+      return { ok: false, status: 403, message: 'transcription is disabled' }
+    }
+    const chunks: Buffer[] = []
+    for await (const chunk of req) {
+      chunks.push(Buffer.from(chunk as Uint8Array))
+    }
+    const audio = Buffer.concat(chunks)
+    if (audio.length === 0) {
+      return { ok: false, status: 400, message: 'empty audio payload' }
+    }
+    const credentials = this.ctx.get('credentials') as
+      | { resolve(ref: string): Promise<{ value: string } | undefined> }
+      | undefined
+    let key: string | undefined
+    if (credentials !== undefined) {
+      try {
+        key = (await credentials.resolve(settings.apiKeyEnv))?.value
+      } catch {
+        // Seam unreachable: fall through to the environment.
+      }
+    }
+    if (key === undefined || key === '') key = process.env[settings.apiKeyEnv]
+    if (key === undefined || key === '') {
+      return { ok: false, status: 400, message: `no API key for credential reference "${settings.apiKeyEnv}"` }
+    }
+    const contentType = req.headers['content-type'] ?? 'application/octet-stream'
+    const disposition = typeof req.headers['content-disposition'] === 'string'
+      ? req.headers['content-disposition']
+      : ''
+    const filenameMatch = /filename="([^"]+)"/.exec(disposition)
+    const filename = filenameMatch?.[1] ?? 'recording.webm'
+    const form = new FormData()
+    form.append('model', settings.model)
+    form.append('file', new Blob([new Uint8Array(audio)], { type: contentType }), filename)
+    try {
+      const controller = new AbortController()
+      const timer = setTimeout(() => { controller.abort() }, 60_000)
+      let res: Response
+      try {
+        res = await fetch(`${settings.baseURL}/audio/transcriptions`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${key}`, accept: 'application/json' },
+          body: form,
+          signal: controller.signal,
+        })
+      } finally {
+        clearTimeout(timer)
+      }
+      if (!res.ok) {
+        const detail = await res.text().catch(() => '')
+        return { ok: false, status: res.status, message: `transcription endpoint HTTP ${res.status}${detail !== '' ? `: ${detail.slice(0, 300)}` : ''}` }
+      }
+      const data = (await res.json()) as { text?: unknown } | null
+      const text = typeof data?.text === 'string' ? data.text : ''
+      if (text === '') {
+        return { ok: false, status: 502, message: 'transcription endpoint returned no text' }
+      }
+      return { ok: true, text }
+    } catch (error) {
+      return { ok: false, status: 502, message: error instanceof Error ? error.message : String(error) }
+    }
   }
 
   /** Read the full per-cycle usage history (log dialog data). */
@@ -1306,6 +1427,7 @@ export class TokenQuotaService extends Service {
     if (this.disposeRouteCheck !== undefined) this.disposeRouteCheck()
     if (this.disposeRouteClear !== undefined) this.disposeRouteClear()
     if (this.disposeRouteBalance !== undefined) this.disposeRouteBalance()
+    if (this.disposeRouteTranscribe !== undefined) this.disposeRouteTranscribe()
     if (this.balanceTimer !== undefined) {
       clearTimeout(this.balanceTimer)
       this.balanceTimer = undefined

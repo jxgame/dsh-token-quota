@@ -27,6 +27,7 @@ import type {
   TokenQuotaMusicStyle,
   TokenQuotaNote,
   TokenQuotaReset,
+  TokenQuotaTranscribeSettings,
 } from '@jxgame2020/dsh-token-quota/types'
 import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
 import type { createTokenQuotaPanelStore, ModelQuotaRow } from './store.ts'
@@ -73,6 +74,8 @@ export interface TokenQuotaPanelInjected {
   setMusicStyle: (style: TokenQuotaMusicStyle) => void
   /** Toggle whether the soundtrack follows only the current session. */
   setMusicOnlyCurrentSession: (only: boolean) => void
+  /** Persist the voice transcription settings (endpoint, key ref, model). */
+  setTranscribeSettings: (settings: TokenQuotaTranscribeSettings) => void
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
   /** Ask the Host to clear log entries before a date, then refresh the log. */
@@ -235,7 +238,7 @@ function loadPanelPos(): Pos | null {
  */
 export function TokenQuotaPanel({
   t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
-  setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
+  setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession, setTranscribeSettings,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -247,7 +250,7 @@ export function TokenQuotaPanel({
   const [hovered, setHovered] = useState(false)
   const [inputActive, setInputActive] = useState(false)
   // Active settings-dialog tab: quota limits vs. live-music vs. misc.
-  const [settingsTab, setSettingsTab] = useState<'quota' | 'music' | 'other'>('quota')
+  const [settingsTab, setSettingsTab] = useState<'quota' | 'music' | 'transcribe' | 'other'>('quota')
   // Drag-to-reorder state for the model rows: the key being dragged and
   // the key currently hovered as the drop target.
   const [dragKey, setDragKey] = useState<string | null>(null)
@@ -442,6 +445,7 @@ export function TokenQuotaPanel({
   const musicVolume = useStore(s => s.musicVolume)
   const musicStyle = useStore(s => s.musicStyle)
   const musicOnlyCurrentSession = useStore(s => s.musicOnlyCurrentSession)
+  const transcribe = useStore(s => s.transcribe)
   const upgrade = useStore(s => s.upgrade)
   const upgradeDismissed = useStore(s => s.upgradeDismissed)
   const checkingUpdates = useStore(s => s.checkingUpdates)
@@ -1115,6 +1119,15 @@ export function TokenQuotaPanel({
             <button
               type="button"
               role="tab"
+              aria-selected={settingsTab === 'transcribe'}
+              className={`${css.dialogTab}${settingsTab === 'transcribe' ? ` ${css.dialogTabActive}` : ''}`}
+              onClick={() => { setSettingsTab('transcribe') }}
+            >
+              {t('settingsTabTranscribe')}
+            </button>
+            <button
+              type="button"
+              role="tab"
               aria-selected={settingsTab === 'other'}
               className={`${css.dialogTab}${settingsTab === 'other' ? ` ${css.dialogTabActive}` : ''}`}
               onClick={() => { setSettingsTab('other') }}
@@ -1277,6 +1290,55 @@ export function TokenQuotaPanel({
                     <span>{t('musicOnlyCurrentSessionLabel')}</span>
                   </label>
                   <div className={css.dialogHint}>{t('musicOnlyCurrentSessionHint')}</div>
+            </div>
+            )}
+            </>
+            )}
+            {settingsTab === 'transcribe' && (
+            <>
+            <div className={css.dialogSection}>
+              <label className={css.checkUpdatesLabel}>
+                <input
+                  type="checkbox"
+                  checked={transcribe.enabled}
+                  onChange={(event) => { setTranscribeSettings({ ...transcribe, enabled: event.target.checked }) }}
+                />
+                <span>{t('transcribeEnabledLabel')}</span>
+              </label>
+              <div className={css.dialogHint}>{t('transcribeEnabledHint')}</div>
+            </div>
+            {transcribe.enabled && (
+            <div className={css.dialogSection}>
+              <label className={css.checkUpdatesLabel}>
+                <span>{t('transcribeBaseURLLabel')}</span>
+                <input
+                  className={css.resetSelect}
+                  type="text"
+                  value={transcribe.baseURL}
+                  onChange={(event) => { setTranscribeSettings({ ...transcribe, baseURL: event.target.value }) }}
+                />
+              </label>
+              <div className={css.dialogHint}>{t('transcribeBaseURLHint')}</div>
+              <label className={css.checkUpdatesLabel}>
+                <span>{t('transcribeApiKeyEnvLabel')}</span>
+                <input
+                  className={css.resetSelect}
+                  type="text"
+                  value={transcribe.apiKeyEnv}
+                  onChange={(event) => { setTranscribeSettings({ ...transcribe, apiKeyEnv: event.target.value }) }}
+                />
+              </label>
+              <div className={css.dialogHint}>{t('transcribeApiKeyEnvHint')}</div>
+              <label className={css.checkUpdatesLabel}>
+                <span>{t('transcribeModelLabel')}</span>
+                <input
+                  className={css.resetSelect}
+                  type="text"
+                  value={transcribe.model}
+                  onChange={(event) => { setTranscribeSettings({ ...transcribe, model: event.target.value }) }}
+                />
+              </label>
+              <div className={css.dialogHint}>{t('transcribeModelHint')}</div>
             </div>
             )}
             </>

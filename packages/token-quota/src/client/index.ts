@@ -28,6 +28,9 @@ import type {} from '@deepseek-ai/dsh-client-locale/client'
 // so both the register name and PropsRuntime narrow against the real
 // declaration — no runtime edge to ui-layout.
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: pulls the 'conversation.input.overlay' SlotMap declaration so the
+// mic registration name narrows against the real declaration.
+import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
@@ -43,15 +46,19 @@ import type {
   TokenQuotaReset,
   TokenQuotaSnapshot,
   TokenQuotaSettings,
+  TokenQuotaTranscribeSettings,
 } from '@jxgame2020/dsh-token-quota/types'
-import { TOKEN_QUOTA_MAX_NOTES } from '@jxgame2020/dsh-token-quota/types'
+import { TOKEN_QUOTA_MAX_NOTES, TOKEN_QUOTA_DEFAULT_TRANSCRIBE } from '@jxgame2020/dsh-token-quota/types'
 import { createTokenQuotaPanelStore } from './store.ts'
 import type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
 import { TokenQuotaPanel } from './TokenQuotaPanel.tsx'
 import { TokenQuotaMusic } from './music.ts'
+import type { TokenQuotaMicInjected } from './mic.tsx'
+import { TokenQuotaMic } from './mic.tsx'
 import { en, zh, type TokenQuotaKey } from './locales.ts'
 
 export type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
+export type { TokenQuotaMicInjected } from './mic.tsx'
 export type { ModelQuotaRow, TokenQuotaPanelState } from './store.ts'
 export { mergeModelRows } from './store.ts'
 export type { TokenQuotaKey } from './locales.ts'
@@ -198,6 +205,14 @@ export function apply(ctx: ClientContext): void {
     volume: raw?.volume ?? 0.5,
     style: raw?.style ?? 'pentatonic',
     onlyCurrentSession: raw?.onlyCurrentSession ?? true,
+  })
+
+  /** Build a writable transcription-settings clone with defaults applied. */
+  const transcribeDefaults = (raw: TokenQuotaSettings['transcribe'] | undefined): TokenQuotaTranscribeSettings => ({
+    enabled: raw?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
+    baseURL: typeof raw?.baseURL === 'string' && raw.baseURL !== '' ? raw.baseURL : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL,
+    apiKeyEnv: typeof raw?.apiKeyEnv === 'string' && raw.apiKeyEnv !== '' ? raw.apiKeyEnv : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv,
+    model: typeof raw?.model === 'string' && raw.model !== '' ? raw.model : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
   })
 
   const keyOf = (selection: ModelSelection | null): string | undefined => {
@@ -382,6 +397,7 @@ export function apply(ctx: ClientContext): void {
     bound?.setMusicVolume(musicSettings.volume)
     bound?.setMusicStyle(musicSettings.style)
     bound?.setMusicOnlyCurrentSession(musicSettings.onlyCurrentSession)
+    bound?.setTranscribeSettings(transcribeDefaults(doc?.transcribe))
     void fetch('/token-quota', { headers: { accept: 'application/json' } }).then(
       (response) => {
         if (!response.ok) {
@@ -479,6 +495,31 @@ export function apply(ctx: ClientContext): void {
   const setBalanceSettings = (enabled: boolean, pollMinutes: number): void => {
     bound?.setBalanceSettings(enabled, pollMinutes)
     void scope.set('balance', { enabled, pollMinutes })
+  }
+
+  /** Persist the voice transcription settings and mirror them into the store. */
+  const setTranscribeSettings = (settings: TokenQuotaTranscribeSettings): void => {
+    bound?.setTranscribeSettings(settings)
+    void scope.set('transcribe', settings)
+  }
+
+  /**
+   * Send a recorded audio blob to the Host, which forwards it to the
+   * configured OpenAI-compatible transcription endpoint. Resolves with the
+   * recognised text.
+   */
+  const transcribe = async (blob: Blob): Promise<string> => {
+    const res = await fetch('/token-quota/transcribe', {
+      method: 'POST',
+      headers: { 'content-type': blob.type !== '' ? blob.type : 'application/octet-stream' },
+      body: blob,
+    })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      throw new Error(detail !== '' ? detail : `transcription HTTP ${res.status}`)
+    }
+    const data = await res.json() as { text?: unknown }
+    return typeof data.text === 'string' ? data.text : ''
   }
 
   /**
@@ -632,6 +673,7 @@ export function apply(ctx: ClientContext): void {
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
       setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
       setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
+      setTranscribeSettings,
     }
   }
 
@@ -644,4 +686,21 @@ export function apply(ctx: ClientContext): void {
     locale: NS,
     inject: injected,
   }, TokenQuotaPanel))
+
+  // Mic button inside the chat composer (top-right corner). Only renders when
+  // transcription is enabled in settings; a press starts recording, a second
+  // press stops and sends the audio to the Host for transcription, then the
+  // recognised text is appended to the composer.
+  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
+    name: 'conversation.input.overlay',
+    id: 'token-quota-mic',
+    order: 100,
+    label: () => t('transcribeTitle'),
+    store,
+    locale: NS,
+    inject: (_sessionId: SessionId, micActions: BoundActions<typeof store>): TokenQuotaMicInjected => {
+      bound = micActions
+      return { transcribe, setTranscribeSettings }
+    },
+  }, TokenQuotaMic))
 }
