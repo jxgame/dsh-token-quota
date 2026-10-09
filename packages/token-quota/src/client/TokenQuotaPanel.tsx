@@ -899,6 +899,7 @@ export function TokenQuotaPanel({
     <>
     <div
       ref={panelRef}
+      data-token-quota-panel=""
       className={`${css.panel}${panelDimClass !== '' ? ` ${panelDimClass}` : ''}`}
       style={panelPos !== null ? { left: panelPos.x, top: panelPos.y, right: 'auto' } : undefined}
       onPointerEnter={() => { setHovered(true) }}
