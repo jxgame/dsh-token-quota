@@ -1460,3 +1460,56 @@
   outline: none;
   border-color: var(--dsw-alias-accent-1, #4a9eff);
 }
+
+/* Transcription credential editor: staged-secret row, save button, and the
+   presence badge fed by the Host (the secret itself never crosses back). */
+.keyRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.keySaveBtn {
+  flex: none;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: 1px solid var(--dsw-alias-divider-1, rgba(0,0,0,0.15));
+  border-radius: 4px;
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.keySaveBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-bg-layer-3, rgba(0,0,0,0.08));
+}
+.keySaveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.keyBadgeOk,
+.keyBadgeOff {
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.keyBadgeOk {
+  color: var(--dsw-alias-state-success-primary, #2f9e44);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary, #2f9e44) 14%, transparent);
+}
+.keyBadgeOff {
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.06));
+}
+
+.keyError {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  word-break: break-word;
+  color: var(--dsw-alias-state-error-primary, #e03131);
+}

@@ -76,6 +76,10 @@ export interface TokenQuotaPanelInjected {
   setMusicOnlyCurrentSession: (only: boolean) => void
   /** Persist the voice transcription settings (endpoint, key ref, model). */
   setTranscribeSettings: (settings: TokenQuotaTranscribeSettings) => void
+  /** Read whether the transcription credential reference currently holds a key. */
+  checkTranscribeKey: (ref: string) => Promise<boolean>
+  /** Store the transcription API key through the credential seam. */
+  saveTranscribeKey: (ref: string, value: string) => Promise<{ ok: boolean; error?: string }>
   /** Ask the Host to check the registry right now, then refresh the snapshot. */
   checkUpdatesNow: () => void
   /** Ask the Host to clear log entries before a date, then refresh the log. */
@@ -239,6 +243,7 @@ function loadPanelPos(): Pos | null {
 export function TokenQuotaPanel({
   t, load, setLimit, selectModel, setMonitored, setOnFull, setReset, setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle, setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
   setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession, setTranscribeSettings,
+  checkTranscribeKey, saveTranscribeKey,
   useStore, actions, useSessions,
 }: TokenQuotaPanelComponentProps) {
   const [collapsed, setCollapsed] = useState(false)
@@ -251,6 +256,13 @@ export function TokenQuotaPanel({
   const [inputActive, setInputActive] = useState(false)
   // Active settings-dialog tab: quota limits vs. live-music vs. misc.
   const [settingsTab, setSettingsTab] = useState<'quota' | 'music' | 'transcribe' | 'other'>('quota')
+  // Transcription API-key editor: the staged secret (never read back from the
+  // Host), whether the Host already holds one, and the last save outcome.
+  const [keyDraft, setKeyDraft] = useState('')
+  const [keyConfigured, setKeyConfigured] = useState<boolean | null>(null)
+  const [keySaving, setKeySaving] = useState(false)
+  const [keySaved, setKeySaved] = useState(false)
+  const [keyError, setKeyError] = useState<string | null>(null)
   // Drag-to-reorder state for the model rows: the key being dragged and
   // the key currently hovered as the drop target.
   const [dragKey, setDragKey] = useState<string | null>(null)
@@ -469,6 +481,45 @@ export function TokenQuotaPanel({
   useEffect(() => {
     if (sessionId !== undefined) load(sessionId)
   }, [sessionId, load])
+
+  // Ask the Host whether the transcription credential reference already holds
+  // a key, so the settings page can show 已配置 / 未配置. The secret itself is
+  // never readable over the wire — only presence is.
+  useEffect(() => {
+    if (settingsTab !== 'transcribe') return
+    const ref = transcribe.apiKeyEnv
+    if (ref === '') return
+    let cancelled = false
+    void checkTranscribeKey(ref).then((configured) => {
+      if (!cancelled) {
+        setKeyConfigured(configured)
+        setKeySaved(false)
+      }
+    })
+    return () => { cancelled = true }
+  }, [settingsTab, transcribe.apiKeyEnv, checkTranscribeKey])
+
+  /**
+   * Write the staged transcription key through the credential seam, then
+   * re-read presence. The secret is never read back, so the badge reflects
+   * what the Host reports rather than what was typed.
+   */
+  const saveKey = (): void => {
+    const ref = transcribe.apiKeyEnv
+    if (ref === '' || keyDraft === '') return
+    setKeySaving(true)
+    setKeyError(null)
+    void saveTranscribeKey(ref, keyDraft).then((result) => {
+      setKeySaving(false)
+      if (result.ok) {
+        setKeyDraft('')
+        setKeyConfigured(true)
+        setKeySaved(true)
+      } else {
+        setKeyError(result.error ?? t('transcribeKeyFailed'))
+      }
+    })
+  }
 
   // Track whether any text input (composer, search, dialogs) currently has
   // focus, so the panel can dim while the user types elsewhere.
@@ -1329,6 +1380,44 @@ export function TokenQuotaPanel({
                 />
               </label>
               <div className={css.dialogHint}>{t('transcribeApiKeyEnvHint')}</div>
+              <label className={css.checkUpdatesLabel}>
+                <span>{t('transcribeKeyLabel')}</span>
+                <input
+                  className={css.resetSelect}
+                  type="password"
+                  autoComplete="off"
+                  value={keyDraft}
+                  placeholder={keyConfigured === true ? t('transcribeKeyPlaceholderSet') : t('transcribeKeyPlaceholder')}
+                  onChange={(event) => {
+                    setKeyDraft(event.target.value)
+                    setKeySaved(false)
+                    setKeyError(null)
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      saveKey()
+                    }
+                  }}
+                />
+              </label>
+              <div className={css.keyRow}>
+                <button
+                  type="button"
+                  className={css.keySaveBtn}
+                  disabled={keyDraft === '' || keySaving}
+                  onClick={() => { saveKey() }}
+                >
+                  {keySaving ? t('transcribeKeySaving') : t('transcribeKeySave')}
+                </button>
+                <span className={keyConfigured === true ? css.keyBadgeOk : css.keyBadgeOff}>
+                  {keySaved
+                    ? t('transcribeKeySaved')
+                    : keyConfigured === true ? t('transcribeKeyConfigured') : t('transcribeKeyMissing')}
+                </span>
+              </div>
+              <div className={css.dialogHint}>{t('transcribeKeyHint')}</div>
+              {keyError !== null && <div className={css.keyError}>{keyError}</div>}
               <label className={css.checkUpdatesLabel}>
                 <span>{t('transcribeModelLabel')}</span>
                 <input

@@ -201,7 +201,7 @@ if (panel !== undefined) {
   if (typeof panel.options.inject !== 'function') problems.push('panel entry declares no inject')
   else {
     const props = panel.options.inject(anyProxy('store'))
-    for (const key of ['load', 'setLimit', 'setBalanceSettings', 'refreshBalance', 'setTranscribeSettings']) {
+    for (const key of ['load', 'setLimit', 'setBalanceSettings', 'refreshBalance', 'setTranscribeSettings', 'checkTranscribeKey', 'saveTranscribeKey']) {
       if (typeof props[key] !== 'function') problems.push(`panel inject is missing "${key}"`)
     }
   }

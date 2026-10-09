@@ -85,6 +85,11 @@ type SelectModelResult =
   | { ok: true; value: { selected: ModelSelection | null } }
   | { ok: false; error: { code: string; message: string } }
 
+/** Credential reference view returned by `remote.credentials.describe`. */
+type CredentialDescribeResult =
+  | { ok: true; value: Record<string, { configured?: boolean; writable?: boolean } | undefined> }
+  | { ok: false; error: { code: string; message: string } }
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** The token-quota floating panel's copy. */
@@ -93,7 +98,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Required services: slot registry, sessions, locale, settings scope, and the Host remote faces. */
-export const inject = ['slots', 'sessions', 'locale', 'settingsScope', 'remote', 'remote.session']
+export const inject = ['slots', 'sessions', 'locale', 'settingsScope', 'remote', 'remote.session', 'remote.credentials']
 
 /**
  * Client plugin body: poll the Host snapshot route, run the full-quota
@@ -532,6 +537,35 @@ export function apply(ctx: ClientContext): void {
   }
 
   /**
+   * Read whether the transcription credential reference currently holds a key,
+   * so the settings page can show 已配置 / 未配置 without ever reading the
+   * secret back (the wire carries it in one direction only).
+   */
+  const checkTranscribeKey = async (ref: string): Promise<boolean> => {
+    try {
+      const result = await ctx.remote.credentials.describe([ref]) as CredentialDescribeResult
+      if (!result.ok) return false
+      return result.value[ref]?.configured === true
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Store the transcription API key through the credential seam, so it lives
+   * in the same credential store the Host resolves from — the user never has
+   * to edit a file by hand.
+   */
+  const saveTranscribeKey = async (ref: string, value: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      await ctx.remote.credentials.set(ref, value)
+      return { ok: true }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  /**
    * Send a recorded audio blob to the Host, which forwards it to the
    * configured OpenAI-compatible transcription endpoint. Resolves with the
    * recognised text.
@@ -701,7 +735,7 @@ export function apply(ctx: ClientContext): void {
       setCheckUpdates, checkUpdatesNow, clearLogBefore, setDimWhenIdle,
       setMusicEnabled, setMusicVolume, setMusicStyle, setMusicOnlyCurrentSession,
       setModelOrder, saveNotes, setBalanceSettings, refreshBalance,
-      setTranscribeSettings,
+      setTranscribeSettings, checkTranscribeKey, saveTranscribeKey,
     }
   }
 
