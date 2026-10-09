@@ -1401,6 +1401,7 @@ export function TokenQuotaPanel({
                   }}
                 />
               </label>
+              <div className={css.dialogHint}>{t('transcribeKeyHint')}</div>
               <div className={css.keyRow}>
                 <button
                   type="button"
@@ -1416,7 +1417,6 @@ export function TokenQuotaPanel({
                     : keyConfigured === true ? t('transcribeKeyConfigured') : t('transcribeKeyMissing')}
                 </span>
               </div>
-              <div className={css.dialogHint}>{t('transcribeKeyHint')}</div>
               {keyError !== null && <div className={css.keyError}>{keyError}</div>}
               <label className={css.checkUpdatesLabel}>
                 <span>{t('transcribeModelLabel')}</span>
