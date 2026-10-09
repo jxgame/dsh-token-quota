@@ -215,6 +215,29 @@ export function apply(ctx: ClientContext): void {
     model: typeof raw?.model === 'string' && raw.model !== '' ? raw.model : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
   })
 
+  // --- Transcription settings source (independent of the panel store, so the
+  //     mic entry — mounted in the session-scoped conversation.input.overlay
+  //     slot — can subscribe without sharing the panel's root-scoped store
+  //     instance (which would fork state across scopes). ---
+  let currentTranscribe: TokenQuotaTranscribeSettings = TOKEN_QUOTA_DEFAULT_TRANSCRIBE
+  const transcribeSubscribers = new Set<() => void>()
+  const emitTranscribe = (): void => { for (const fn of transcribeSubscribers) fn() }
+  const subscribeTranscribe = (cb: () => void): () => void => {
+    transcribeSubscribers.add(cb)
+    return () => { transcribeSubscribers.delete(cb) }
+  }
+  const getTranscribe = (): TokenQuotaTranscribeSettings => currentTranscribe
+  const applyTranscribe = (settings: TokenQuotaTranscribeSettings): void => {
+    if (
+      settings.enabled === currentTranscribe.enabled
+      && settings.baseURL === currentTranscribe.baseURL
+      && settings.apiKeyEnv === currentTranscribe.apiKeyEnv
+      && settings.model === currentTranscribe.model
+    ) return
+    currentTranscribe = settings
+    emitTranscribe()
+  }
+
   const keyOf = (selection: ModelSelection | null): string | undefined => {
     if (selection === null) return undefined
     return `${selection.provider}/${selection.model}`
@@ -501,29 +524,6 @@ export function apply(ctx: ClientContext): void {
   }
 
   /** Persist the voice transcription settings and mirror them into the store. */
-
-  // --- Transcription settings source (independent of the panel store, so the
-  //     mic entry — mounted in the session-scoped conversation.input.overlay
-  //     slot — can subscribe without sharing the panel's root-scoped store
-  //     instance (which would fork state across scopes). ---
-  let currentTranscribe: TokenQuotaTranscribeSettings = TOKEN_QUOTA_DEFAULT_TRANSCRIBE
-  const transcribeSubscribers = new Set<() => void>()
-  const emitTranscribe = (): void => { for (const fn of transcribeSubscribers) fn() }
-  const subscribeTranscribe = (cb: () => void): () => void => {
-    transcribeSubscribers.add(cb)
-    return () => { transcribeSubscribers.delete(cb) }
-  }
-  const getTranscribe = (): TokenQuotaTranscribeSettings => currentTranscribe
-  const applyTranscribe = (settings: TokenQuotaTranscribeSettings): void => {
-    if (
-      settings.enabled === currentTranscribe.enabled
-      && settings.baseURL === currentTranscribe.baseURL
-      && settings.apiKeyEnv === currentTranscribe.apiKeyEnv
-      && settings.model === currentTranscribe.model
-    ) return
-    currentTranscribe = settings
-    emitTranscribe()
-  }
 
   const setTranscribeSettings = (settings: TokenQuotaTranscribeSettings): void => {
     applyTranscribe(settings)
