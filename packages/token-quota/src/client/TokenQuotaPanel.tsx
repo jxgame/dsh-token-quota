@@ -523,17 +523,45 @@ export function TokenQuotaPanel({
 
   // Track whether any text input (composer, search, dialogs) currently has
   // focus, so the panel can dim while the user types elsewhere.
+  // Track whether the user is typing in a text field OUTSIDE this plugin's own
+  // surfaces, so the panel can dim while the chat behind it needs to stay
+  // readable.
+  //
+  // `focusout` matters as much as `focusin`: an earlier version observed only
+  // focusin, so once any field had ever received focus the flag stayed true for
+  // the rest of the session and the panel sat at 30% opacity — which reads as
+  // "the panel disappeared" until a reload reset the state. Recompute from
+  // document.activeElement rather than trusting the event, and also settle on
+  // pointer-down and window blur so a removed focused node cannot strand it.
   useEffect(() => {
-    const onFocusIn = (event: FocusEvent): void => {
-      const target = event.target as HTMLElement | null
-      const isInput = target !== null && (
-        target.matches('input, textarea, [contenteditable="true"]')
-        || target.closest('input, textarea, [contenteditable="true"]') !== null
-      )
-      setInputActive(isInput)
+    const isEditable = (el: Element | null): boolean => el !== null && (
+      el.matches('input, textarea, [contenteditable="true"]')
+      || el.closest('input, textarea, [contenteditable="true"]') !== null
+    )
+    const isOwnSurface = (el: Element | null): boolean => {
+      if (el === null) return false
+      for (const node of [panelRef.current, settingsRef.current, logRef.current]) {
+        if (node !== null && node.contains(el)) return true
+      }
+      return false
     }
-    window.addEventListener('focusin', onFocusIn)
-    return () => { window.removeEventListener('focusin', onFocusIn) }
+    const sync = (): void => {
+      const active = document.activeElement
+      setInputActive(!isOwnSurface(active) && isEditable(active))
+    }
+    // focusout/pointerdown run before the next element gains focus: settle next tick.
+    const deferredSync = (): void => { window.setTimeout(sync, 0) }
+    document.addEventListener('focusin', sync)
+    document.addEventListener('focusout', deferredSync)
+    document.addEventListener('pointerdown', deferredSync, true)
+    window.addEventListener('blur', sync)
+    sync()
+    return () => {
+      document.removeEventListener('focusin', sync)
+      document.removeEventListener('focusout', deferredSync)
+      document.removeEventListener('pointerdown', deferredSync, true)
+      window.removeEventListener('blur', sync)
+    }
   }, [])
 
   // When a NEW latest version appears (manual check or periodic poll):

@@ -25,9 +25,10 @@
   opacity: 0.55;
 }
 
-/* Stronger dim while typing in an input outside the panel. */
+/* Stronger dim while typing in an input outside the panel. Kept well above
+   "invisible" on purpose: at 0.3 the panel read as closed rather than dimmed. */
 .panelDimStrong {
-  opacity: 0.3;
+  opacity: 0.45;
 }
 
 .header {
