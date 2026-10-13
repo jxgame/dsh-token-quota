@@ -32,6 +32,8 @@ Zero changes to the DSH core repo: no core file is modified, no official bundle 
   **Live music**: an ambient soundtrack composed from host actions (request starts, tool calls, turn ends) played via Web Audio or an attached MIDI output, with volume/style controls and an optional current-session-only scope.
 - **语音转录（转录API）**：设置里启用后，输入框右上角出现 🎤 按钮——按下录音、再按停止并转录，识别文字直接插入输入框；接口为 OpenAI 兼容的 `POST {baseURL}/audio/transcriptions`（默认硅基流动），可配置接口地址、API Key 凭证变量与模型名。
   **Voice transcription**: once enabled in settings, a 🎤 button appears at the top-right of the composer — press to record, press again to stop and transcribe, and the recognised text is inserted into the input; the endpoint is OpenAI-compatible `POST {baseURL}/audio/transcriptions` (SiliconFlow by default), with configurable base URL, API-key credential reference and model name.
+- **临存（选段暂存）**：在消息或输入框里选中文字 → 浮层给出「复制 / 临存」，或直接按 `Cmd/Ctrl+Shift+S`。每条暂存变成一个带序号 emoji 的圆标（输入框上方靠右），悬停显示全文，点击插入到输入框光标处并消耗该条。在输入框里临存是**剪切**（原文移走，`Cmd+Z` 可撤销），消息里的文字不会被改动。每个会话最多 9 条，**跟随会话**（不会串到别的会话）且刷新不丢。
+  **Stash**: select text in a message or in the composer draft → a popup offers Copy / Stash, or press `Cmd/Ctrl+Shift+S`. Each snippet becomes a numbered emoji chip above the composer (right-aligned); hovering shows the whole text, and clicking inserts it at the caret and retires the chip. Stashing from the composer **cuts** the text out (`Cmd+Z` restores it); text in messages is never modified. Up to 9 snippets per session, scoped to that session and persisted across reloads.
 
 ## 安装 / Installation
 
@@ -125,6 +127,10 @@ For modifying the source, offline distribution, or code review. The source repo 
 - 语音转录 / Voice transcription:
   - 设置里启用后，输入框（内容编辑器）右上角出现 🎤；按下开始录音（按钮变红脉动），再按停止并发送转录，识别文字追加到输入框；转录中按钮显示 `…`；错误（麦克风权限、空录音、接口报错）在按钮旁短暂提示。/ Once enabled, a 🎤 appears at the top-right of the composer; press to record (button pulses red), press again to stop and transcribe, and the recognised text is appended to the input; while transcribing the button shows `…`; errors (mic permission, empty recording, endpoint failure) flash beside the button.
   - API Key 通过凭证解析（环境变量名 → 凭证值 → `.env` 回退），未配置时请求返回错误提示。/ The API key resolves through the credential seam (env var name → credential file → `.env` fallback); a missing key surfaces a clear error.
+- 临存 / Stash:
+  - 存：在消息或输入框里选中文字，点浮层的「临存」（旁边是「复制」），或按 `Cmd/Ctrl+Shift+S`。在输入框里临存等于**剪切**，原文会被移走（`Cmd+Z` 可撤销）；在消息里临存不动原文。/ Capture: select text in a message or in the composer, then click Stash in the popup (next to Copy), or press `Cmd/Ctrl+Shift+S`. In the composer this cuts the text out (`Cmd+Z` restores it); in a message the original is untouched.
+  - 取：输入框上方靠右出现带序号 emoji 的圆标（`1️⃣…9️⃣`），悬停看全文，点击插入到输入框**光标处**并消耗该条；后面的序号自动前移。/ Retrieve: numbered emoji chips appear above the composer, flush right (`1️⃣…9️⃣`); hover shows the whole text, clicking inserts it at the **caret** and retires that chip, with later badges renumbering.
+  - 跟随会话：切换会话看到的是该会话自己的临存，不会串；刷新页面也不丢（按会话分别持久化）。/ Session-scoped: each session keeps its own stash, and it survives a reload (persisted per session).
 
 ## 数据与重置 / Data & Reset
 
@@ -148,11 +154,14 @@ dsh-token-quota/
     │   ├── types.ts            # 共享类型与 wire 常量 / shared types and wire constants
     │   ├── invariant.ts        # 运行时守卫 / runtime guards
     │   └── client/             # 浏览器端 / browser side
-    │       ├── index.ts        # apply：轮询 + 满额策略 + 面板与麦克风插槽注册 / polling + full-quota strategy + panel/mic slot registration
+    │       ├── index.ts        # apply：轮询 + 满额策略 + 面板/麦克风/临存插槽注册 / polling + full-quota strategy + panel/mic/stash slot registration
     │       ├── TokenQuotaPanel.tsx
     │       ├── TokenQuotaPanel.module.css
     │       ├── mic.tsx         # 输入框右上角麦克风：录音 + 转录 + 插入输入框 / composer mic: record + transcribe + insert
     │       ├── mic.module.css
+    │       ├── TokenQuotaStash.tsx  # 临存：选段捕获 + 序号圆标 + 点击插入光标处 / stash: capture, numbered chips, insert at caret
+    │       ├── TokenQuotaStash.module.css
+    │       ├── stash.ts        # 按会话隔离且持久化的临存 store / per-session persisted stash store
     │       ├── store.ts
     │       ├── music.ts        # 宿主动作驱动的环境音乐引擎 / host-action-driven music engine
     │       ├── locales.ts
