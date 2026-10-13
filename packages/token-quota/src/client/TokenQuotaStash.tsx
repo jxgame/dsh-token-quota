@@ -3,8 +3,9 @@
  * sits inside the composer card beside the mic.
  *
  * Capture (two ways, as requested):
- *   1. select text in the conversation -> a small popup offers 复制 / 临存;
- *   2. select text anywhere -> press Cmd/Ctrl+Shift+S.
+ *   1. select text — in a message OR in the composer draft — and use the small
+ *      popup that offers 复制 / 临存;
+ *   2. press Cmd/Ctrl+Shift+S on any selection.
  *
  * Retrieval: one numbered chip per snippet to the left of the mic. Hovering a
  * chip shows the whole text; clicking drops it into the composer at the caret
@@ -32,10 +33,11 @@ export type TokenQuotaStashComponentProps =
 
 /** The harness composer's editable surface. */
 const COMPOSER_INPUT = '[data-composer-input]'
-/** Anything matching this is "not conversation text" for capture purposes: the
-    composer itself, this plugin's own layers, and form fields — selecting text
-    inside an input is editing, not quoting. */
-const IGNORED_SELECTION = '[data-composer-card], [data-token-quota-stash], [data-token-quota-panel], input, textarea, select'
+/** Anything matching this is "not capturable text": this plugin's own layers
+    and form fields — selecting text inside an input is editing, not quoting.
+    The composer is deliberately NOT excluded: stashing part of a draft is a
+    supported flow. */
+const IGNORED_SELECTION = '[data-token-quota-stash], [data-token-quota-panel], input, textarea, select'
 
 /** The composer's contentEditable, when the composer is on screen. */
 function composerEditor(): HTMLElement | null {
@@ -117,11 +119,11 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
       const editor = composerEditor()
       const anchor = selection.anchorNode
       if (editor !== null && anchor !== null && editor.contains(anchor)) {
-        // Caret inside the composer: remember it, and never offer to stash the
-        // draft the user is writing.
-        caretRef.current = selection.getRangeAt(0).cloneRange()
-        setPending(null)
-        return
+        // Selecting inside the composer is a first-class capture source too
+        // (write several thoughts, send one, stash the rest). Record the
+        // insertion point on the way through — but only for a collapsed caret,
+        // since a live selection would be replaced when a snippet lands.
+        if (selection.isCollapsed) caretRef.current = selection.getRangeAt(0).cloneRange()
       }
       if (selection.isCollapsed) {
         setPending(null)
@@ -148,26 +150,31 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
         return
       }
       const half = 70
+      // The composer sits at the bottom of the window, so a popup below the
+      // selection would fall off-screen: flip it above when there is no room.
+      const POPUP_HEIGHT = 34
+      const below = rect.bottom + 6
+      const y = below + POPUP_HEIGHT > window.innerHeight
+        ? Math.max(8, rect.top - POPUP_HEIGHT - 6)
+        : below
       setPending({
         text,
         x: Math.min(Math.max(rect.left + rect.width / 2, half + 8), window.innerWidth - half - 8),
-        y: rect.bottom + 6,
+        y,
       })
     }
     document.addEventListener('selectionchange', sync)
     return () => { document.removeEventListener('selectionchange', sync) }
   }, [])
 
-  // Capture by keyboard: Cmd/Ctrl+Shift+S on any conversation selection.
+  // Capture by keyboard: Cmd/Ctrl+Shift+S on any selection — a message or the
+  // draft being written in the composer.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (!(event.metaKey || event.ctrlKey) || !event.shiftKey) return
       if (event.key.toLowerCase() !== 's') return
       const selection = window.getSelection()
       if (selection === null || selection.isCollapsed) return
-      const anchor = selection.anchorNode
-      const editor = composerEditor()
-      if (editor !== null && anchor !== null && editor.contains(anchor)) return
       const text = selection.toString().trim()
       if (text === '') return
       event.preventDefault()
