@@ -95,6 +95,42 @@ function insertIntoComposer(text: string, caret: Range | null): void {
 }
 
 /**
+ * Remove the live selection when it sits inside the composer: stashing part of
+ * a draft means MOVING it out of the way ("cut"), so the user does not have to
+ * delete it by hand and cannot accidentally send it. Selections anywhere else
+ * (a message) are left untouched.
+ */
+function cutComposerSelection(): void {
+  const editor = composerEditor()
+  const selection = window.getSelection()
+  if (editor === null || selection === null || selection.rangeCount === 0) return
+  const anchor = selection.anchorNode
+  if (anchor === null || !editor.contains(anchor) || selection.isCollapsed) return
+  // execCommand keeps the contentEditable's own undo stack intact, so Cmd+Z
+  // restores the cut text.
+  try {
+    document.execCommand('delete')
+  } catch {
+    // Some engines throw on execCommand; fall through to the range API.
+  }
+  // Verify rather than trust the return value: a successful delete collapses
+  // the selection, and some editors report success without applying anything.
+  const after = window.getSelection()
+  if (after !== null && after.isCollapsed) return
+  for (let index = selection.rangeCount - 1; index >= 0; index -= 1) {
+    selection.getRangeAt(index).deleteContents()
+  }
+}
+
+/** Keycap emoji for the chip badges; index 0 renders as 1️⃣. */
+const STASH_BADGES = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'] as const
+
+/** The badge for the n-th (0-based) chip, falling back to a plain digit. */
+function stashBadge(index: number): string {
+  return STASH_BADGES[index] ?? String(index + 1)
+}
+
+/**
  * Numbered stash chips plus the capture popup, rendered inside the composer.
  */
 export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashComponentProps): JSX.Element {
@@ -179,6 +215,8 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
       if (text === '') return
       event.preventDefault()
       actions.add(text)
+      // Stashing a composer draft moves the text out of the way.
+      cutComposerSelection()
       setPending(null)
     }
     window.addEventListener('keydown', onKeyDown)
@@ -189,6 +227,8 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
     const text = pendingRef.current?.text
     if (text === undefined) return
     actions.add(text)
+    // In the composer this is a cut; in a message the text stays put.
+    cutComposerSelection()
     setPending(null)
     window.getSelection()?.removeAllRanges()
   }
@@ -219,7 +259,7 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
               }}
               aria-label={t('stashChipHint').replace('{n}', String(index + 1))}
             >
-              {index + 1}
+              {stashBadge(index)}
             </button>
           ))}
         </div>
@@ -254,10 +294,23 @@ export function TokenQuotaStash({ t, useStore, actions }: TokenQuotaStashCompone
               setPending(null)
             }}
           >
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <rect x="5.6" y="5.6" width="7.8" height="7.8" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
+              <path
+                d="M10.4 5.6V4a1.4 1.4 0 0 0-1.4-1.4H4A1.4 1.4 0 0 0 2.6 4v5A1.4 1.4 0 0 0 4 10.4h1.6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
             {t('stashCopy')}
           </button>
           <span className={css.selDivider} aria-hidden="true" />
           <button type="button" className={css.selBtn} onClick={stash}>
+            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+              <path d="M9.3 1.5 3.8 8.7h3.4l-.9 5.8 5.5-7.3H8.4z" fill="currentColor" />
+            </svg>
             {t('stashSave')}
           </button>
         </div>

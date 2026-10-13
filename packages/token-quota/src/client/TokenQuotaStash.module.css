@@ -29,18 +29,18 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  font-size: 12px;
-  font-weight: 600;
+  /* Keycap emoji badge: sized down so the glyph's own box stays inside the
+     chip. Emoji ignore `color`, so hover reads through background/border. */
+  font-size: 13px;
   line-height: 1;
   color: var(--dsw-alias-label-secondary);
   background: var(--dsw-alias-bg-layer-2);
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 999px;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s, border-color 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 .stashChip:hover {
-  color: var(--dsw-alias-brand-primary);
   border-color: var(--dsw-alias-brand-primary);
   background: var(--dsw-alias-bg-layer-3);
 }
@@ -84,6 +84,9 @@
 }
 
 .selBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 12px;
   padding: 3px 8px;
   border: none;
