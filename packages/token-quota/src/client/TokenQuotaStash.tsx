@@ -106,19 +106,21 @@ function cutComposerSelection(): void {
   if (editor === null || selection === null || selection.rangeCount === 0) return
   const anchor = selection.anchorNode
   if (anchor === null || !editor.contains(anchor) || selection.isCollapsed) return
-  // execCommand keeps the contentEditable's own undo stack intact, so Cmd+Z
-  // restores the cut text.
-  try {
-    document.execCommand('delete')
-  } catch {
-    // Some engines throw on execCommand; fall through to the range API.
-  }
-  // Verify rather than trust the return value: a successful delete collapses
-  // the selection, and some editors report success without applying anything.
-  const after = window.getSelection()
-  if (after !== null && after.isCollapsed) return
-  for (let index = selection.rangeCount - 1; index >= 0; index -= 1) {
-    selection.getRangeAt(index).deleteContents()
+  const before = editor.textContent ?? ''
+  // Route the removal through the editor's OWN input pipeline. The composer is
+  // a Lexical editor and only learns about changes it receives as input events;
+  // touching the DOM directly (Range.deleteContents) leaves Lexical's model
+  // holding the old text, so its next reconcile puts the text straight back —
+  // which is exactly why a full-selection cut used to come undone while a
+  // partial one appeared to work.
+  for (const attempt of ['cut', 'delete', 'insertText'] as const) {
+    try {
+      if (attempt === 'insertText') document.execCommand('insertText', false, '')
+      else document.execCommand(attempt)
+    } catch {
+      // Fall through to the next strategy.
+    }
+    if ((editor.textContent ?? '') !== before) return
   }
 }
 

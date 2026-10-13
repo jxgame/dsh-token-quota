@@ -1,25 +1,19 @@
 /* Stash chips + capture popup. Uses --dsw-* semantic aliases only. */
 
-/* Chip row: pinned inside the composer card, left of the mic.
-   `row-reverse` keeps #1 closest to the mic so numbering reads right-to-left
-   and added chips grow away from the mic instead of under it. */
+/* Chip row: OUTSIDE the composer card, just above its top edge and flush with
+   its right edge — the same band the composer's own stats line occupies, so the
+   row reads as a peer of that line rather than as a control inside the input.
+   `row-reverse` keeps badge 1 nearest the right edge and lets added chips grow
+   leftwards. */
 .stashRow {
   position: absolute;
-  top: 4px;
-  right: 6px; /* fallback: no mic rendered (transcription disabled) */
+  top: -32px;
+  right: 2px;
   display: flex;
   flex-direction: row-reverse;
   gap: 4px;
   pointer-events: auto;
   z-index: 10;
-}
-
-/* The mic occupies right:6 and is 26px wide with a 6px gap before it. While it
-   is on screen the chips shift left of it so the two never overlap; with
-   transcription off the mic is not rendered and the fallback above applies.
-   Keyed off the composer card's stable public attribute. */
-[data-composer-card]:has([data-token-quota-mic]) .stashRow {
-  right: 38px;
 }
 
 .stashChip {
