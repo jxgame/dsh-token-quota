@@ -55,6 +55,8 @@ import { TokenQuotaPanel } from './TokenQuotaPanel.tsx'
 import { TokenQuotaMusic } from './music.ts'
 import type { TokenQuotaMicInjected } from './mic.tsx'
 import { TokenQuotaMic } from './mic.tsx'
+import { createTokenQuotaStashStore } from './stash.ts'
+import { TokenQuotaStash } from './TokenQuotaStash.tsx'
 import { en, zh, type TokenQuotaKey } from './locales.ts'
 
 export type { TokenQuotaPanelInjected } from './TokenQuotaPanel.tsx'
@@ -770,4 +772,20 @@ export function apply(ctx: ClientContext): void {
       t: t as (key: string) => string,
     }),
   }, TokenQuotaMic))
+
+  // Stash: numbered snippets picked out of the conversation, dropped back into
+  // the composer on click. This entry carries its OWN store handle (never the
+  // panel's): registered on a session-scoped slot, the renderer builds one
+  // instance per session and the engine suffixes the persist key with that
+  // session's id — so snippets follow their session across reloads and cannot
+  // leak into another one.
+  const stashStore = createTokenQuotaStashStore()
+  ctx.slots.inject('conversation.input.overlay', () => ctx.slots.register({
+    name: 'conversation.input.overlay',
+    id: 'token-quota-stash',
+    order: 90,
+    label: () => t('stashTitle'),
+    store: stashStore,
+    locale: NS,
+  }, TokenQuotaStash))
 }

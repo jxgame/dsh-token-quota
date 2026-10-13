@@ -193,6 +193,7 @@ const byId = new Map(registrations.map(r => [r.options.id, r]))
 const problems = []
 if (!byId.has('token-quota')) problems.push('panel entry "token-quota" was not registered into shell.overlay')
 if (!byId.has('token-quota-mic')) problems.push('mic entry "token-quota-mic" was not registered into conversation.input.overlay')
+if (!byId.has('token-quota-stash')) problems.push('stash entry "token-quota-stash" was not registered into conversation.input.overlay')
 
 const panel = byId.get('token-quota')
 if (panel !== undefined) {
@@ -204,6 +205,19 @@ if (panel !== undefined) {
     for (const key of ['load', 'setLimit', 'setBalanceSettings', 'refreshBalance', 'setTranscribeSettings', 'checkTranscribeKey', 'saveTranscribeKey']) {
       if (typeof props[key] !== 'function') problems.push(`panel inject is missing "${key}"`)
     }
+  }
+}
+
+// The stash keeps its own session-scoped store: per-session state comes from the
+// renderer keying instances by session, which only works when the handle is NOT
+// the panel's root-scoped one (sharing it across scopes is a registration error).
+const stash = byId.get('token-quota-stash')
+if (stash !== undefined) {
+  if (stash.scope !== 'session') problems.push(`stash entry resolved to scope "${stash.scope}", expected "session"`)
+  if (stash.options.store === undefined) problems.push('stash entry declares no store (needs per-session persistence)')
+  if (stash.options.locale === undefined) problems.push('stash entry declares no locale')
+  if (panel !== undefined && stash.options.store === panel.options.store) {
+    problems.push('stash entry must not reuse the root-scoped panel store handle')
   }
 }
 

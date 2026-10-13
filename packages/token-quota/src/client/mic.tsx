@@ -178,7 +178,7 @@ export function TokenQuotaMic({
 
   const state = transcribing ? 'busy' : recording ? 'rec' : 'idle'
   return (
-    <div className={css.micWrap} title={error ?? t('transcribeHint')}>
+    <div className={css.micWrap} data-token-quota-mic="" title={error ?? t('transcribeHint')}>
       <button
         type="button"
         className={`${css.micBtn}${state === 'rec' ? ` ${css.micRec}` : ''}${state === 'busy' ? ` ${css.micBusy}` : ''}${error !== null ? ` ${css.micErr}` : ''}`}
