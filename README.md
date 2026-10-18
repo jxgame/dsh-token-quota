@@ -37,23 +37,33 @@ Zero changes to the DSH core repo: no core file is modified, no official bundle 
 
 ## 安装 / Installation
 
-### 方式一：npm 安装（推荐）/ Option A: npm install (recommended)
+### 方式一：插件管理器安装（推荐）/ Option A: the plugin manager (recommended)
 
-在你的 web profile（`~/.dsh/profiles/web`）下安装依赖：
+本包声明了**组合包**（`dsh.bundle` → `cordis.patch.yml`），所以 DSH 的**插件管理器**可以直接安装它，并自动完成挂载与启用 —— 不需要手改任何配置文件。
 
-Install the dependency in your web profile (`~/.dsh/profiles/web`):
+This package declares a **composition bundle** (`dsh.bundle` → `cordis.patch.yml`), so the Harness **plugin manager** can install it and mount it automatically — no configuration files to edit by hand.
+
+在 DSH 里打开 **设置 → 插件**，输入包名并安装、启用：
+
+In DSH open **Settings → Plugins**, enter the package name, install and enable it:
+
+```
+@jxgame2020/dsh-token-quota
+```
+
+> 组合包里的 `cordis.patch.yml` 就是插件的挂载声明（`id: token-quota`，`name: '@jxgame2020/dsh-token-quota'`），插件管理器读取它来装配 loader 树。
+> The bundle's `cordis.patch.yml` carries the mount row (`id: token-quota`, `name: '@jxgame2020/dsh-token-quota'`); the plugin manager reads it to compose the loader tree.
+
+### 方式二：手动安装 / Option B: manual install
+
+profile 下安装依赖，然后**自己**把挂载写进 `~/.dsh/profiles/web/cordis.patch.yml`：
+
+Install the dependency in the profile, then add the mount row to `~/.dsh/profiles/web/cordis.patch.yml` yourself:
 
 ```bash
 cd ~/.dsh/profiles/web
 npm install @jxgame2020/dsh-token-quota
 ```
-
-> 用 pnpm 管理 profile 的话：`pnpm add @jxgame2020/dsh-token-quota`。
-> With pnpm: `pnpm add @jxgame2020/dsh-token-quota`.
-
-在 `cordis.patch.yml` 中挂载插件：
-
-Mount the plugin in `cordis.patch.yml`:
 
 ```yaml
 - insert:
@@ -65,7 +75,10 @@ Mount the plugin in `cordis.patch.yml`:
 
 Restart `dsh web`; the floating panel appears on the right side once installed.
 
-### 方式二：从 GitHub 源码安装 / Option B: install from source (GitHub)
+> 挂载用的 `id` 必须与插件读取的设置命名空间同名（本插件为 `token-quota`）。改成别的 id 会导致面板读不到限额配置。
+> The mount `id` must equal the settings namespace the plugin reads (here `token-quota`), otherwise the panel cannot see its configuration.
+
+### 方式三：从 GitHub 源码安装 / Option C: install from source (GitHub)
 
 适合想改源码、离线分发或审阅代码的情况。源码仓库不提交构建产物（`lib/`），clone 后需在本机构建（工具链来自 DSH 仓库的 workspace）。
 
@@ -100,7 +113,7 @@ For modifying the source, offline distribution, or code review. The source repo 
    "@jxgame2020/dsh-token-quota": "link:/<absolute-path>/deepseek-harness-package/dsh-token-quota/packages/token-quota"
    ```
 
-   然后 `cd ~/.dsh/profiles/web && pnpm install`；`cordis.patch.yml` 挂载与方式一相同；重启 `dsh web`。/ Then `cd ~/.dsh/profiles/web && pnpm install`; the `cordis.patch.yml` mount is the same as Option A; restart `dsh web`.
+   然后 `cd ~/.dsh/profiles/web && pnpm install`；`cordis.patch.yml` 挂载与方式二相同；重启 `dsh web`。/ Then `cd ~/.dsh/profiles/web && pnpm install`; the `cordis.patch.yml` mount is the same as Option B; restart `dsh web`.
 
 ## 使用 / Usage
 
@@ -136,6 +149,8 @@ For modifying the source, offline distribution, or code review. The source repo 
 
 - 计数文件：`$DSH_HOME/token-quota.json`（默认 `~/.dsh/token-quota.json`）。/ Counter file: `$DSH_HOME/token-quota.json` (default `~/.dsh/token-quota.json`).
 - 重置周期默认「本机时区午夜」；可改为任意时区与时刻。跨过重置时刻时当日计数清零并归档进用量日志。/ The reset cycle defaults to machine-local midnight and can be changed to any timezone/time; crossing the reset moment zeroes the counters and archives the finished day into the usage log.
+- 命名空间实现：本插件把设置字段声明在自己的 `Config` 里（新 Harness 中"插件 Config 即设置命名空间"），浏览器端通过 `remote.settings.describe()/mutate()` 读写（带 revision 乐观锁），宿主端在入口重载时应用。因此**挂载 id 必须等于 `token-quota`**。
+  **Namespace wiring**: the settings fields live in the plugin's own `Config` (in this Harness a plugin's Config *is* its namespace); the browser reads and writes them through `remote.settings.describe()/mutate()` with revision-based optimistic concurrency, and the Host applies them when the entry reloads — so **the mount id must be `token-quota`**.
 - 限额与面板配置保存在 `~/.dsh/settings.yaml` 的 `token-quota` 命名空间（`limits` / `monitored` / `onFull` / `reset` / `balance` / `music` / `transcribe` / `notes` / `order`）。/ Limits and panel preferences live in the `token-quota` namespace of `~/.dsh/settings.yaml` (`limits` / `monitored` / `onFull` / `reset` / `balance` / `music` / `transcribe` / `notes` / `order`).
   - `balance`: `{ enabled, pollMinutes }`（余额显示与轮询分钟数）。/ balance display toggle and poll interval.
   - `music`: `{ enabled, volume, style, onlyCurrentSession }`（环境音乐）。/ ambient music settings.

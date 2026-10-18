@@ -1,0 +1,9 @@
+# Composition bundle for @jxgame2020/dsh-token-quota.
+#
+# The Harness plugin manager installs a package only when it declares
+# `dsh.bundle` and ships this patch: the patch is what actually mounts the
+# plugin into the profile's loader tree. Installing the package alone puts the
+# code in node_modules; this row is what makes the Harness load it.
+- insert:
+    - id: token-quota
+      name: '@jxgame2020/dsh-token-quota'
