@@ -957,13 +957,36 @@ export class TokenQuotaService extends Service {
     // version dropped `settings.get(ns)`, so read the composed configuration
     // once from the config editor and index it by profile entry id.
     const configEditor = this.ctx.get('configEditor') as {
-      configuration: () => Array<{ entry: { options: { id?: string; config?: unknown } } }>
+      configuration: () => Array<{
+        entry: { options?: { id?: string; config?: unknown }; fiber?: { config?: unknown } }
+        inherited?: unknown
+        override?: unknown
+      }>
     } | undefined
+    // Provider profiles live in another plugin entry's config (the profile's
+    // `providers` map). Which of the composed layers carries it depends on the
+    // deployment (user patch layer vs inherited base), so take the first layer
+    // that actually has a `providers` map and fall back to the entry's own
+    // config. Reading only one layer silently finds no providers at all.
+    const profileOf = (row: {
+      entry?: { options?: { config?: unknown }; fiber?: { config?: unknown } }
+      inherited?: unknown
+      override?: unknown
+    }): unknown => {
+      const layers = [row.override, row.inherited, row.entry?.fiber?.config, row.entry?.options?.config]
+      for (const layer of layers) {
+        if (layer !== null && typeof layer === 'object' && 'providers' in layer) return layer
+      }
+      for (const layer of layers) {
+        if (layer !== null && typeof layer === 'object') return layer
+      }
+      return undefined
+    }
     const liveConfigs = new Map<string, unknown>()
     try {
       for (const row of configEditor?.configuration() ?? []) {
-        const id = row.entry.options.id
-        if (id !== undefined) liveConfigs.set(id, row.entry.options.config)
+        const id = row.entry?.options?.id
+        if (id !== undefined) liveConfigs.set(id, profileOf(row))
       }
     } catch {
       // No config editor in this deployment: balance discovery falls back.
@@ -1007,6 +1030,15 @@ export class TokenQuotaService extends Service {
       }
     }
     if (found.size === 0) found.set('deepseek', fallback())
+    // One line per discovery pass, so a deployment can be checked from the
+    // terminal that runs `dsh web` instead of guessing from the panel.
+    try {
+      this.ctx.logger?.info(
+        `token-quota: balance sources = ${[...found.values()].map(source => `${source.provider}(${source.kind})`).join(', ')}`,
+      )
+    } catch {
+      // Logging is best-effort.
+    }
     return found
   }
 
