@@ -46,7 +46,6 @@ import type { LlmCallConfig, LlmModelInfo, LlmProviderInfo, TokenUsage } from '@
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import {
   TOKEN_QUOTA_EXCEEDED_CODE,
-  TOKEN_QUOTA_NAMESPACE,
   tokenQuotaKey,
   type TokenQuotaConfig,
   type TokenQuotaBalance,
@@ -63,7 +62,7 @@ import {
   TOKEN_QUOTA_DEFAULT_BALANCE,
   TOKEN_QUOTA_DEFAULT_TRANSCRIBE,
 } from './types.ts'
-import { assertTokenQuotaLimit, splitTokenQuotaKey } from './invariant.ts'
+import { splitTokenQuotaKey } from './invariant.ts'
 
 /** Inlined at build time (tsdown `define`) from package.json; undefined in the type-check-only host build. */
 declare const __TOKEN_QUOTA_VERSION__: string | undefined
@@ -226,7 +225,7 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Settings schema resolving the per-model daily caps document. */
-const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
+const TOKEN_QUOTA_SETTINGS_FIELDS = {
   limits: z.dict(z.number().step(1).min(0)).default({}),
   monitored: z.array(z.string()).default([]),
   // `switchPriority` is a legacy value accepted for documents saved by older
@@ -275,7 +274,8 @@ const TOKEN_QUOTA_SETTINGS_SCHEMA = z.object({
     apiKeyEnv: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv),
     model: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model),
   }).default({ ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE }),
-})
+} as const
+
 
 /** Serialized counter file shape. */
 interface PersistedQuota {
@@ -462,6 +462,7 @@ function parseTeamorouterBalance(data: unknown): ParsedBalance {
 export class TokenQuotaService extends Service {
   static Config: z<TokenQuotaConfig> = z.object({
     storagePath: z.string().default(''),
+    ...TOKEN_QUOTA_SETTINGS_FIELDS,
   })
 
   private readonly storagePath: string
@@ -475,7 +476,84 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
-  private settingsSource: () => TokenQuotaSettings = () => ({ limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE }, transcribe: { ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE } })
+  /** Settings resolved from this plugin entry's own config (see applySettings). */
+  private resolvedSettings: TokenQuotaSettings = { limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE }, transcribe: { ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE } }
+
+  /** The settings document this instance runs with. */
+  private settingsSource = (): TokenQuotaSettings => this.resolvedSettings
+
+  /**
+   * Normalize this entry's config into the plugin's settings shape and apply
+   * it. Called once per instantiation: a settings write from the panel reloads
+   * the entry, so this is the live-apply path that used to be an onChange
+   * callback.
+   * @param config - the plugin entry config (Config schema, defaults applied).
+   */
+  private applySettings(config: TokenQuotaConfig): void {
+    const doc: TokenQuotaConfig = config
+    const settings: TokenQuotaSettings = {
+      limits: doc.limits ?? {},
+      monitored: doc.monitored ?? [],
+      onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
+      checkUpdates: doc.checkUpdates ?? true,
+      dimWhenIdle: doc.dimWhenIdle ?? false,
+      order: Array.isArray(doc.order) ? doc.order : [],
+      balance: {
+        enabled: doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled,
+        pollMinutes: typeof doc.balance?.pollMinutes === 'number'
+          ? Math.max(1, Math.min(120, Math.round(doc.balance.pollMinutes)))
+          : TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes,
+      },
+      transcribe: {
+        enabled: doc.transcribe?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
+        baseURL: typeof doc.transcribe?.baseURL === 'string' && doc.transcribe.baseURL !== ''
+          ? doc.transcribe.baseURL.replace(/\/+$/, '')
+          : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL,
+        apiKeyEnv: typeof doc.transcribe?.apiKeyEnv === 'string' && doc.transcribe.apiKeyEnv !== ''
+          ? doc.transcribe.apiKeyEnv
+          : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv,
+        model: typeof doc.transcribe?.model === 'string' && doc.transcribe.model !== ''
+          ? doc.transcribe.model
+          : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
+      },
+      music: {
+        enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
+        volume: doc.music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
+        style: doc.music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
+        onlyCurrentSession: doc.music?.onlyCurrentSession ?? TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession,
+      },
+      notes: Array.isArray(doc.notes) ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES) : [],
+      ...doc.reset !== undefined && doc.reset !== null ? { reset: doc.reset as TokenQuotaReset } : {},
+    }
+    this.resolvedSettings = settings
+
+    // Live-apply the parts the service acts on.
+    this.limits = { ...settings.limits }
+    this.monitored = settings.monitored.length > 0 ? new Set(settings.monitored) : undefined
+    this.checkUpdates = settings.checkUpdates
+    const balanceEnabled = settings.balance.enabled
+    const turnedOn = balanceEnabled && !this.balanceEnabled
+    this.balanceEnabled = balanceEnabled
+    if (!balanceEnabled) this.balances.clear()
+    const configured = settings.reset
+    if (configured !== undefined
+      && typeof configured === 'object'
+      && configured !== null
+      && typeof (configured as TokenQuotaReset).offsetHours === 'number'
+      && typeof (configured as TokenQuotaReset).hour === 'number'
+      && typeof (configured as TokenQuotaReset).minute === 'number') {
+      this.reset = {
+        offsetHours: Math.max(-12, Math.min(14, Math.round(configured.offsetHours))),
+        hour: Math.max(0, Math.min(23, Math.round(configured.hour))),
+        minute: Math.max(0, Math.min(59, Math.round(configured.minute))),
+      }
+    } else {
+      this.reset = { offsetHours: localOffsetHours(), hour: 0, minute: 0 }
+    }
+    this.rollCycleIfNeeded()
+    // Turning balance polling on fetches immediately so the panel has numbers.
+    if (turnedOn) void this.refreshAllBalances()
+  }
   /** Whether update checks are enabled (mirrors the settings document). */
   private checkUpdates = true
   /** Cached upgrade availability; recomputed by {@link refreshUpgrade}. */
@@ -532,114 +610,11 @@ export class TokenQuotaService extends Service {
       : defaultStoragePath()
     this.load()
 
-    // Limits live in the user settings document; the Web panel writes them and
-    // the section watcher pushes every change back here. DSH 0.1.5 replaced
-    // the standalone `installSettingsSection` helper with
-    // `SettingsProvider.installSection`, reached through `ctx.inject` so the
-    // settings service is guaranteed to be up before registration.
-    ctx.inject(['settings'], (settingsCtx) => {
-      settingsCtx.settings.installSection(ctx, TOKEN_QUOTA_NAMESPACE, TOKEN_QUOTA_SETTINGS_SCHEMA, { limits: {} }, {
-      setSource: (current) => {
-        // Normalize the resolved (schema-shaped) document into the plugin's
-        // required shape: empty monitored = monitor everything, absent onFull
-        // falls back to 'stop'.
-        this.settingsSource = () => {
-          const doc = current()
-          return {
-            limits: doc.limits ?? {},
-            monitored: doc.monitored ?? [],
-            // Legacy `switchPriority` (removed in 0.1.7) maps to `switchAll`:
-            // capped models first, then uncapped — both monitored-only.
-            onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
-            checkUpdates: doc.checkUpdates ?? true,
-            dimWhenIdle: doc.dimWhenIdle ?? false,
-            order: Array.isArray(doc.order) ? doc.order : [],
-            balance: {
-              enabled: doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled,
-              pollMinutes: typeof doc.balance?.pollMinutes === 'number'
-                ? Math.max(1, Math.min(120, Math.round(doc.balance.pollMinutes)))
-                : TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes,
-            },
-            transcribe: {
-              enabled: doc.transcribe?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
-              baseURL: typeof doc.transcribe?.baseURL === 'string' && doc.transcribe.baseURL !== ''
-                ? doc.transcribe.baseURL.replace(/\/+$/, '')
-                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL,
-              apiKeyEnv: typeof doc.transcribe?.apiKeyEnv === 'string' && doc.transcribe.apiKeyEnv !== ''
-                ? doc.transcribe.apiKeyEnv
-                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv,
-              model: typeof doc.transcribe?.model === 'string' && doc.transcribe.model !== ''
-                ? doc.transcribe.model
-                : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
-            },
-            notes: Array.isArray(doc.notes)
-              ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES).flatMap((note) => {
-                if (typeof note.id !== 'string') return []
-                return [{
-                  id: note.id,
-                  title: note.title ?? '',
-                  text: note.text ?? '',
-                  x: note.x ?? 80,
-                  y: note.y ?? 80,
-                  width: note.width ?? 220,
-                  height: note.height ?? 220,
-                  collapsed: note.collapsed ?? false,
-                  visible: note.visible ?? true,
-                }]
-              })
-              : [],
-            reset: doc.reset ?? undefined,
-            music: {
-              enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
-              volume: doc.music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
-              style: doc.music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
-              onlyCurrentSession: doc.music?.onlyCurrentSession ?? TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession,
-            },
-          }
-        }
-      },
-      validate: (value) => {
-        for (const [key, limit] of Object.entries(value.limits ?? {})) {
-          assertTokenQuotaLimit(limit, key)
-          splitTokenQuotaKey(key)
-        }
-      },
-      onChange: () => {
-        const doc = this.settingsSource()
-        this.limits = { ...doc.limits }
-        this.monitored = doc.monitored !== undefined && doc.monitored.length > 0
-          ? new Set(doc.monitored)
-          : undefined
-        this.checkUpdates = doc.checkUpdates
-        this.syncUpdateChecking()
-        const balanceEnabled = doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled
-        const turnedOn = balanceEnabled && !this.balanceEnabled
-        this.balanceEnabled = balanceEnabled
-        if (!balanceEnabled) this.balances.clear()
-        this.syncBalancePolling()
-        // Flipping the toggle on: fetch right away so the panel shows numbers.
-        if (turnedOn) void this.refreshAllBalances()
-        if (doc.reset !== undefined
-          && typeof doc.reset === 'object'
-          && doc.reset !== null
-          && typeof (doc.reset as TokenQuotaReset).offsetHours === 'number'
-          && typeof (doc.reset as TokenQuotaReset).hour === 'number'
-          && typeof (doc.reset as TokenQuotaReset).minute === 'number') {
-          const configured = doc.reset as TokenQuotaReset
-          this.reset = {
-            offsetHours: Math.max(-12, Math.min(14, Math.round(configured.offsetHours))),
-            hour: Math.max(0, Math.min(23, Math.round(configured.hour))),
-            minute: Math.max(0, Math.min(59, Math.round(configured.minute))),
-          }
-          this.rollCycleIfNeeded()
-        } else {
-          // null / malformed (unset) = machine-local midnight — the default.
-          this.reset = { offsetHours: localOffsetHours(), hour: 0, minute: 0 }
-          this.rollCycleIfNeeded()
-        }
-      },
-      })
-    })
+    // This Harness version exposes a plugin's Config AS its settings namespace:
+    // the panel writes through `remote.settings`, the loader re-applies this
+    // entry, and the live-apply work that used to hang off `installSection`'s
+    // onChange callback happens once per instantiation instead.
+    this.applySettings(config)
 
     // Snapshot route: optional — only mounted when a webServer service exists
     // (the Web profile); headless deployments keep the enforcement without it.
@@ -978,7 +953,21 @@ export class TokenQuotaService extends Service {
         settingsPath?: readonly string[]
       }>
     } | undefined
-    const settings = this.ctx.get('settings') as { get: (ns: string) => unknown } | undefined
+    // Provider profiles live in OTHER plugins' entry configs. This Harness
+    // version dropped `settings.get(ns)`, so read the composed configuration
+    // once from the config editor and index it by profile entry id.
+    const configEditor = this.ctx.get('configEditor') as {
+      configuration: () => Array<{ entry: { options: { id?: string; config?: unknown } } }>
+    } | undefined
+    const liveConfigs = new Map<string, unknown>()
+    try {
+      for (const row of configEditor?.configuration() ?? []) {
+        const id = row.entry.options.id
+        if (id !== undefined) liveConfigs.set(id, row.entry.options.config)
+      }
+    } catch {
+      // No config editor in this deployment: balance discovery falls back.
+    }
     const fallback = (): BalanceSource => ({
       provider: 'deepseek',
       keyEnv: 'DEEPSEEK_API_KEY',
@@ -991,7 +980,7 @@ export class TokenQuotaService extends Service {
     }
     for (const entry of llm.listConfigurableProviders()) {
       try {
-        let profile: unknown = settings?.get(entry.settingsNs)
+        let profile: unknown = liveConfigs.get(entry.settingsNs)
         for (const segment of entry.settingsPath ?? []) {
           profile = profile !== null && typeof profile === 'object'
             ? (profile as Record<string, unknown>)[segment]

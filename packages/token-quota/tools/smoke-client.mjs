@@ -158,16 +158,26 @@ const ctx = {
     register: () => () => {},
     bind: () => (key) => key,
   },
-  settingsScope: {
-    bind: () => ({
-      getSnapshot: () => ({ value: SETTINGS_DOC }),
-      set: async (key, value) => { emitted.push({ key, value }) },
-    }),
-  },
   remote: {
     session: {
       selectModel: async () => ({ ok: false, error: { code: 'x', message: 'stub' } }),
       modelCatalog: async () => ({ ok: true, value: { groups: [] } }),
+    },
+    // The settings namespace rides the remotes contract in this Harness
+    // version: describe() reads it, mutate() writes path ops.
+    settings: {
+      describe: async () => ({
+        ok: true,
+        value: {
+          writable: true,
+          hasDocument: true,
+          namespaces: [{ ns: 'token-quota', revision: 1, value: SETTINGS_DOC }],
+        },
+      }),
+      mutate: async (ns, ops, revision) => {
+        for (const op of ops) emitted.push({ ns, op })
+        return { ok: true, value: { ns, revision: (revision ?? 0) + 1, value: SETTINGS_DOC } }
+      },
     },
   },
   slots: { inject, register },
@@ -187,6 +197,10 @@ try {
   if (error instanceof Error && error.stack) console.error(error.stack.split('\n').slice(1, 6).join('\n'))
   process.exit(1)
 }
+
+// pull() reads settings over the (async) remotes contract; give the first read
+// a tick to land before asserting the observable state it feeds.
+await new Promise(resolve => setTimeout(resolve, 25))
 
 // ------------------------------------------------------------------- assertions
 const byId = new Map(registrations.map(r => [r.options.id, r]))

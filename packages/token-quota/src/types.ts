@@ -258,8 +258,11 @@ export interface TokenQuotaSettings {
   order: string[]
 }
 
-/** Token-quota plugin configuration. */
-export interface TokenQuotaConfig {
+/** Token-quota plugin configuration (the entry config doubles as the namespace). */
+export interface TokenQuotaConfig
+  extends Partial<Omit<TokenQuotaSettings, 'onFull'>> {
+  /** Legacy `switchPriority` stays accepted in the schema; the runtime maps it. */
+  onFull?: TokenQuotaFullAction | 'switchPriority'
   /**
    * Counter JSON file path. Defaults to `token-quota.json` under the Harness
    * home (`DSH_HOME` or `~/.dsh`).

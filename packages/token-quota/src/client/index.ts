@@ -20,8 +20,9 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
 // Type-only: pulls the ctx.remote merge (forwarded event face).
 import type {} from '@deepseek-ai/dsh-api-gateway/client'
-// Type-only: pulls the ctx.settingsScope merge.
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only: pulls the ctx.remote.settings merge (the settings namespace the
+// client reads and writes through the remotes contract).
+import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the ctx.locale merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the 'shell.overlay' SlotMap declaration (the key's owner)
@@ -100,7 +101,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Required services: slot registry, sessions, locale, settings scope, and the Host remote faces. */
-export const inject = ['slots', 'sessions', 'locale', 'settingsScope', 'remote', 'remote.session', 'remote.credentials']
+export const inject = ['slots', 'sessions', 'locale', 'remote', 'remote.settings', 'remote.session', 'remote.credentials']
 
 /**
  * Client plugin body: poll the Host snapshot route, run the full-quota
@@ -112,7 +113,67 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'token-quota-ui: panel dictionaries')
 
   const t = ctx.locale.bind(NS)
-  const scope = ctx.settingsScope.bind<TokenQuotaSettings>({ namespace: TOKEN_QUOTA_NAMESPACE })
+  // --- Settings namespace adapter -------------------------------------------
+  // The client used to hold a synchronous settings scope (`settingsScope.bind`).
+  // This Harness version moved configuration onto the remotes contract, so the
+  // document is read with `remote.settings.describe()` and written with
+  // `mutate()` path ops (guarded by the revision the last read observed). The
+  // adapter keeps the old synchronous `getSnapshot()/set()` shape so the rest
+  // of this module stays readable.
+  let settingsValue: TokenQuotaSettings | undefined
+  let settingsRevision: number | undefined
+
+  /** Re-read the token-quota namespace from the Host. */
+  const readSettings = async (): Promise<TokenQuotaSettings | undefined> => {
+    try {
+      const response = await ctx.remote.settings.describe()
+      if (!response.ok) return settingsValue
+      const view = response.value.namespaces.find(entry => entry.ns === TOKEN_QUOTA_NAMESPACE)
+      if (view !== undefined) {
+        settingsRevision = view.revision
+        settingsValue = view.value as unknown as TokenQuotaSettings
+      }
+      return settingsValue
+    } catch {
+      // Remotes unavailable (offline, older Host): keep the last document.
+      return settingsValue
+    }
+  }
+
+  /**
+   * Write one path of the namespace. Path ops avoid the read-modify-write race
+   * a whole-object update would introduce (two editors, one section each), and
+   * a stale revision is retried once against a fresh read instead of dropping
+   * the change.
+   */
+  const writeSetting = (path: string[], value: unknown): void => {
+    void (async () => {
+      const op = value === undefined
+        ? { op: 'unset' as const, path }
+        : { op: 'set' as const, path, value: value as never }
+      try {
+        let response = await ctx.remote.settings.mutate(TOKEN_QUOTA_NAMESPACE, [op], settingsRevision)
+        if (!response.ok) {
+          await readSettings()
+          response = await ctx.remote.settings.mutate(TOKEN_QUOTA_NAMESPACE, [op], settingsRevision)
+        }
+        if (response.ok) {
+          settingsRevision = response.value.revision
+          settingsValue = response.value.value as unknown as TokenQuotaSettings
+        }
+      } catch {
+        // Leave the last good document in place; the next poll re-reads it.
+      }
+    })()
+  }
+
+  const scope = {
+    getSnapshot: (): { value: TokenQuotaSettings | undefined } => ({ value: settingsValue }),
+    set: (key: string, value: unknown): Promise<void> => {
+      writeSetting([key], value)
+      return Promise.resolve()
+    },
+  }
   // The Host `dsh-session` package's `ctx.sessions: SessionStore` merge can
   // shadow the client ISessions face in a combined type-check; the runtime
   // 'sessions' service is the ISessions implementation regardless.
@@ -392,7 +453,14 @@ export function apply(ctx: ClientContext): void {
     )
   }
   const pull = (): void => {
+    void pullOnce()
+  }
+
+  const pullOnce = async (): Promise<void> => {
     pullCount += 1
+    // Settings now arrive over the remotes contract: refresh the document
+    // before reading any of it below.
+    await readSettings()
     const doc = scope.getSnapshot().value
     lastMonitored = doc?.monitored !== undefined && doc.monitored.length > 0 ? doc.monitored : null
     // Legacy `switchPriority` (removed in 0.1.7) maps to `switchAll`.
@@ -487,8 +555,9 @@ export function apply(ctx: ClientContext): void {
   }
 
   const setLimit = (key: string, limit: number): void => {
-    const current = scope.getSnapshot().value?.limits ?? {}
-    void scope.set('limits', { ...current, [key]: limit })
+    // One path op, not a whole-map rewrite: two editors setting different
+    // models must not clobber each other.
+    writeSetting(['limits', key], limit)
   }
 
   const setMonitored = (monitored: string[] | null): void => {

@@ -441,7 +441,14 @@ export function TokenQuotaPanel({
       // Storage unavailable: the position still applies for this session.
     }
   }
-  const sessionId = useSessions(s => s.current)
+  // This Harness version dropped the list's `current` field: the visible
+  // conversation is the session the main view retains.
+  const sessionId = useSessions((state) => {
+    for (const session of Object.values(state.byId)) {
+      if ((session.retainedBy.mainView ?? 0) > 0) return session.id
+    }
+    return undefined
+  })
   const snapshot = useStore(s => s.snapshot)
   const groups = useStore(s => s.groups)
   const current = useStore(s => s.current)
