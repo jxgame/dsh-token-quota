@@ -53,6 +53,8 @@ import {
   type TokenQuotaLog,
   type TokenQuotaLogEntry,
   type TokenQuotaMusicAction,
+  type TokenQuotaMusicStyle,
+  type TokenQuotaNote,
   type TokenQuotaReset,
   type TokenQuotaSettings,
   type TokenQuotaSnapshot,
@@ -225,19 +227,22 @@ declare module '@deepseek-ai/cordis' {
 }
 
 /** Settings schema resolving the per-model daily caps document. */
+/** Settings fields. Every one is `volatile`: the Harness settings contract only
+ *  allows a form edit to write a node declared live, and these are exactly the
+ *  values the panel edits at runtime. */
 const TOKEN_QUOTA_SETTINGS_FIELDS = {
-  limits: z.dict(z.number().step(1).min(0)).default({}),
-  monitored: z.array(z.string()).default([]),
+  limits: z.dict(z.number().step(1).min(0)).default({}).volatile(),
+  monitored: z.array(z.string()).default([]).volatile(),
   // `switchPriority` is a legacy value accepted for documents saved by older
   // plugin versions; the runtime normalizes it to `switchAll` (see
   // settingsSource below) so existing users keep auto-switching behavior
   // without reconfiguring.
-  onFull: z.union(['stop', 'switchQuota', 'switchAll', 'switchPriority']).default('stop'),
-  checkUpdates: z.boolean().default(true),
+  onFull: z.union(['stop', 'switchQuota', 'switchAll', 'switchPriority']).default('stop').volatile(),
+  checkUpdates: z.boolean().default(true).volatile(),
   // Client-side appearance preference; the host only stores it.
-  dimWhenIdle: z.boolean().default(false),
+  dimWhenIdle: z.boolean().default(false).volatile(),
   // Drag-to-reorder: display order of model keys, written by the panel.
-  order: z.array(z.string()).default([]),
+  order: z.array(z.string()).default([]).volatile(),
   // Floating scratchpad notes: the panel owns them, the host stores them.
   notes: z.array(z.object({
     id: z.string(),
@@ -249,23 +254,23 @@ const TOKEN_QUOTA_SETTINGS_FIELDS = {
     height: z.number().default(220),
     collapsed: z.boolean().default(false),
     visible: z.boolean().default(true),
-  })).default([]),
+  })).default([]).volatile(),
   // `reset` is a user-facing preference outside the validated surface: the
   // panel writes it and the host validates the shape at runtime. `z.any` with
   // a null default keeps it out of the strict fields above.
-  reset: z.any().default(null),
+  reset: z.any().default(null).volatile(),
   // Live music: host persists the document, the browser half plays it.
   music: z.object({
     enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.enabled),
     volume: z.number().min(0).max(1).default(TOKEN_QUOTA_DEFAULT_MUSIC.volume),
     style: z.union(['major', 'minor', 'pentatonic']).default(TOKEN_QUOTA_DEFAULT_MUSIC.style),
     onlyCurrentSession: z.boolean().default(TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession),
-  }).default({ ...TOKEN_QUOTA_DEFAULT_MUSIC }),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_MUSIC }).volatile(),
   // Account balance: host polls the provider endpoint, panel displays it.
   balance: z.object({
     enabled: z.boolean().default(TOKEN_QUOTA_DEFAULT_BALANCE.enabled),
     pollMinutes: z.number().min(1).max(120).default(TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes),
-  }).default({ ...TOKEN_QUOTA_DEFAULT_BALANCE }),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_BALANCE }).volatile(),
   // Voice transcription: the browser records and the host forwards the audio
   // to an OpenAI-compatible endpoint.
   transcribe: z.object({
@@ -273,7 +278,7 @@ const TOKEN_QUOTA_SETTINGS_FIELDS = {
     baseURL: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL),
     apiKeyEnv: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv),
     model: z.string().default(TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model),
-  }).default({ ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE }),
+  }).default({ ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE }).volatile(),
 } as const
 
 
@@ -369,6 +374,14 @@ const TEAMOROUTER_HOST = 'teamorouter.cn'
 const DEFAULT_BALANCE_KEY_ENV: Record<BalanceKind, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
   teamorouter: 'TEAMO_ROUTER_API_KEY',
+}
+
+
+/** Read a config field that may be a live volatile accessor. */
+function readField<T>(field: T | { get: () => T } | undefined): T | undefined {
+  if (field === undefined || field === null) return undefined
+  const accessor = field as { get?: () => T }
+  return typeof accessor.get === 'function' ? accessor.get() : field as T
 }
 
 /** Fallback currency per family, used before the first successful fetch. */
@@ -471,10 +484,10 @@ function parseTeamorouterBalance(data: unknown): ParsedBalance {
 }
 
 export class TokenQuotaService extends Service {
-  static Config: z<TokenQuotaConfig> = z.object({
+  static Config = z.object({
     storagePath: z.string().default(''),
     ...TOKEN_QUOTA_SETTINGS_FIELDS,
-  })
+  }) as unknown as z<TokenQuotaConfig>
 
   private readonly storagePath: string
   private reset: TokenQuotaReset = {
@@ -487,6 +500,9 @@ export class TokenQuotaService extends Service {
   private history: Record<string, Record<string, number>> = {}
   private limits: Record<string, number> = {}
   private monitored: Set<string> | undefined = undefined
+  /** The live config object this instance runs with (volatile fields update in place). */
+  private runtimeConfig: TokenQuotaConfig | undefined
+
   /** Settings resolved from this plugin entry's own config (see applySettings). */
   private resolvedSettings: TokenQuotaSettings = { limits: {}, monitored: [], onFull: 'stop', checkUpdates: true, dimWhenIdle: false, music: { ...TOKEN_QUOTA_DEFAULT_MUSIC }, order: [], notes: [], balance: { ...TOKEN_QUOTA_DEFAULT_BALANCE }, transcribe: { ...TOKEN_QUOTA_DEFAULT_TRANSCRIBE } }
 
@@ -501,40 +517,64 @@ export class TokenQuotaService extends Service {
    * @param config - the plugin entry config (Config schema, defaults applied).
    */
   private applySettings(config: TokenQuotaConfig): void {
-    const doc: TokenQuotaConfig = config
+    // Volatile config fields are live accessors, so read through readField()
+    // rather than assuming plain values.
+    this.runtimeConfig = config
+    const raw = config as unknown as Record<string, unknown>
+    const field = <T>(key: string): T | undefined =>
+      readField(raw[key] as T | { get: () => T } | undefined)
+    const limits = field<Record<string, number>>('limits') ?? {}
+    const monitored = field<string[]>('monitored') ?? []
+    const onFullRaw = field<string>('onFull')
+    const order = field<string[]>('order') ?? []
+    const notes = field<TokenQuotaNote[]>('notes') ?? []
+    const balance = field<{ enabled?: boolean; pollMinutes?: number }>('balance')
+    const transcribe = field<{
+      enabled?: boolean
+      baseURL?: string
+      apiKeyEnv?: string
+      model?: string
+    }>('transcribe')
+    const music = field<{
+      enabled?: boolean
+      volume?: number
+      style?: TokenQuotaMusicStyle
+      onlyCurrentSession?: boolean
+    }>('music')
+    const resetValue = field<TokenQuotaReset>('reset')
     const settings: TokenQuotaSettings = {
-      limits: doc.limits ?? {},
-      monitored: doc.monitored ?? [],
-      onFull: doc.onFull === 'switchPriority' ? 'switchAll' : (doc.onFull ?? 'stop'),
-      checkUpdates: doc.checkUpdates ?? true,
-      dimWhenIdle: doc.dimWhenIdle ?? false,
-      order: Array.isArray(doc.order) ? doc.order : [],
+      limits,
+      monitored,
+      onFull: onFullRaw === 'switchPriority' ? 'switchAll' : ((onFullRaw ?? 'stop') as TokenQuotaSettings['onFull']),
+      checkUpdates: field<boolean>('checkUpdates') ?? true,
+      dimWhenIdle: field<boolean>('dimWhenIdle') ?? false,
+      order: Array.isArray(order) ? order : [],
       balance: {
-        enabled: doc.balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled,
-        pollMinutes: typeof doc.balance?.pollMinutes === 'number'
-          ? Math.max(1, Math.min(120, Math.round(doc.balance.pollMinutes)))
+        enabled: balance?.enabled ?? TOKEN_QUOTA_DEFAULT_BALANCE.enabled,
+        pollMinutes: typeof balance?.pollMinutes === 'number'
+          ? Math.max(1, Math.min(120, Math.round(balance.pollMinutes)))
           : TOKEN_QUOTA_DEFAULT_BALANCE.pollMinutes,
       },
       transcribe: {
-        enabled: doc.transcribe?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
-        baseURL: typeof doc.transcribe?.baseURL === 'string' && doc.transcribe.baseURL !== ''
-          ? doc.transcribe.baseURL.replace(/\/+$/, '')
+        enabled: transcribe?.enabled ?? TOKEN_QUOTA_DEFAULT_TRANSCRIBE.enabled,
+        baseURL: typeof transcribe?.baseURL === 'string' && transcribe.baseURL !== ''
+          ? transcribe.baseURL.replace(/\/+$/, '')
           : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.baseURL,
-        apiKeyEnv: typeof doc.transcribe?.apiKeyEnv === 'string' && doc.transcribe.apiKeyEnv !== ''
-          ? doc.transcribe.apiKeyEnv
+        apiKeyEnv: typeof transcribe?.apiKeyEnv === 'string' && transcribe.apiKeyEnv !== ''
+          ? transcribe.apiKeyEnv
           : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.apiKeyEnv,
-        model: typeof doc.transcribe?.model === 'string' && doc.transcribe.model !== ''
-          ? doc.transcribe.model
+        model: typeof transcribe?.model === 'string' && transcribe.model !== ''
+          ? transcribe.model
           : TOKEN_QUOTA_DEFAULT_TRANSCRIBE.model,
       },
       music: {
-        enabled: doc.music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
-        volume: doc.music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
-        style: doc.music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
-        onlyCurrentSession: doc.music?.onlyCurrentSession ?? TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession,
+        enabled: music?.enabled ?? TOKEN_QUOTA_DEFAULT_MUSIC.enabled,
+        volume: music?.volume ?? TOKEN_QUOTA_DEFAULT_MUSIC.volume,
+        style: music?.style ?? TOKEN_QUOTA_DEFAULT_MUSIC.style,
+        onlyCurrentSession: music?.onlyCurrentSession ?? TOKEN_QUOTA_DEFAULT_MUSIC.onlyCurrentSession,
       },
-      notes: Array.isArray(doc.notes) ? doc.notes.slice(0, TOKEN_QUOTA_MAX_NOTES) : [],
-      ...doc.reset !== undefined && doc.reset !== null ? { reset: doc.reset as TokenQuotaReset } : {},
+      notes: Array.isArray(notes) ? notes.slice(0, TOKEN_QUOTA_MAX_NOTES) : [],
+      ...resetValue !== undefined && resetValue !== null ? { reset: resetValue } : {},
     }
     this.resolvedSettings = settings
 
@@ -626,6 +666,12 @@ export class TokenQuotaService extends Service {
     // entry, and the live-apply work that used to hang off `installSection`'s
     // onChange callback happens once per instantiation instead.
     this.applySettings(config)
+    // A volatile settings write does NOT reload the entry: the loader updates
+    // the live config accessors and emits this event, so re-apply from them.
+    ;(ctx as unknown as { on: (event: string, listener: () => void) => void })
+      .on('loader/volatile-update', () => {
+        if (this.runtimeConfig !== undefined) this.applySettings(this.runtimeConfig)
+      })
 
     // Snapshot route: optional — only mounted when a webServer service exists
     // (the Web profile); headless deployments keep the enforcement without it.
