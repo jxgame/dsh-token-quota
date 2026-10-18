@@ -360,6 +360,17 @@ const DEEPSEEK_BALANCE_HOST = 'api.deepseek.com'
 /** TeamoRouter's host; its model and billing endpoints share this domain. */
 const TEAMOROUTER_HOST = 'teamorouter.cn'
 
+/**
+ * Credential reference each family's adapter falls back to when the provider
+ * entry declares no `apiKeyEnv` (e.g. `llm-deepseek`, whose adapter resolves
+ * DEEPSEEK_API_KEY internally). Querying that same reference is what makes such
+ * a provider represent the same account the model calls are billed to.
+ */
+const DEFAULT_BALANCE_KEY_ENV: Record<BalanceKind, string> = {
+  deepseek: 'DEEPSEEK_API_KEY',
+  teamorouter: 'TEAMO_ROUTER_API_KEY',
+}
+
 /** Fallback currency per family, used before the first successful fetch. */
 const BALANCE_DEFAULT_CURRENCY: Record<BalanceKind, string> = {
   deepseek: 'CNY',
@@ -1018,10 +1029,14 @@ export class TokenQuotaService extends Service {
           ? record.baseURL
           : undefined
         const kind = balanceKindOf(entry.provider, keyEnv, baseURL)
-        if (kind === undefined || keyEnv === undefined) continue
+        if (kind === undefined) continue
+        // A provider may legitimately declare no apiKeyEnv (the adapter then
+        // resolves its family default); query that same reference rather than
+        // dropping the provider from the balance window.
+        const balanceKeyEnv = keyEnv ?? DEFAULT_BALANCE_KEY_ENV[kind]
         found.set(entry.provider, {
           provider: entry.provider,
-          keyEnv,
+          keyEnv: balanceKeyEnv,
           baseURL: baseURL ?? (kind === 'deepseek' ? `https://${DEEPSEEK_BALANCE_HOST}` : `https://${TEAMOROUTER_HOST}`),
           kind,
         })
